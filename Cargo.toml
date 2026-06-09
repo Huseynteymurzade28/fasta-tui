@@ -1,0 +1,10 @@
+[package]
+name = "fasta-tui"
+version = "0.1.0"
+edition = "2021"
+description = "A TUI for visualizing FASTA DNA sequences with a 3D Braille double helix"
+
+[dependencies]
+clap = { version = "4.5", features = ["derive"] }
+crossterm = "0.28"
+ratatui = "0.29"
