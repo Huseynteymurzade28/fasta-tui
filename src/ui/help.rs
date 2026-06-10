@@ -3,7 +3,7 @@
 use ratatui::{
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Clear, Paragraph},
+    widgets::{Block, BorderType, Clear, Paragraph},
     Frame,
 };
 
@@ -11,7 +11,10 @@ use super::centered_rect;
 use crate::app::App;
 
 const BINDINGS: &[(&str, &str)] = &[
-    ("↑/k, ↓/j", "Scroll the sequence (one codon)"),
+    ("←/h, →/l", "Move cursor one base"),
+    ("↑/k, ↓/j", "Move cursor one row"),
+    ("PgUp / PgDn", "Move one page"),
+    ("Home/g, End/G", "Jump to start / end"),
     ("1 / 2 / 3", "Switch view: Reader / Stats / Protein"),
     ("Tab / ]", "Next FASTA record"),
     ("BackTab / [", "Previous FASTA record"),
@@ -45,6 +48,7 @@ pub fn render(frame: &mut Frame, app: &App) {
 
     let popup = Paragraph::new(lines).block(
         Block::bordered()
+            .border_type(BorderType::Rounded)
             .title(" Key Bindings — press ? or Esc to close ")
             .border_style(Style::default().fg(palette.accent)),
     );

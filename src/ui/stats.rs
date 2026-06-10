@@ -5,7 +5,7 @@ use ratatui::{
     style::{Color, Modifier, Style},
     symbols::Marker,
     text::Span,
-    widgets::{Axis, BarChart, Block, Chart, Dataset, GraphType},
+    widgets::{Axis, BarChart, Block, BorderType, Chart, Dataset, GraphType},
     Frame,
 };
 
@@ -31,7 +31,11 @@ fn render_composition(frame: &mut Frame, area: Rect, app: &App) {
     let data = counts.as_pairs();
 
     let bars = BarChart::default()
-        .block(Block::bordered().title(format!(" Base Composition (total {} bp) ", counts.total())))
+        .block(
+            Block::bordered()
+                .border_type(BorderType::Rounded)
+                .title(format!(" Base Composition (total {} bp) ", counts.total())),
+        )
         .data(&data)
         .bar_width(7)
         .bar_gap(3)
@@ -62,7 +66,11 @@ fn render_gc_curve(frame: &mut Frame, area: Rect, app: &App) {
         .data(&points)];
 
     let chart = Chart::new(datasets)
-        .block(Block::bordered().title(format!(" GC Content — sliding window ({GC_WINDOW} bp) ")))
+        .block(
+            Block::bordered()
+                .border_type(BorderType::Rounded)
+                .title(format!(" GC Content — sliding window ({GC_WINDOW} bp) ")),
+        )
         .x_axis(
             Axis::default()
                 .title("position")

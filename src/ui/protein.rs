@@ -4,7 +4,7 @@ use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Paragraph, Wrap},
+    widgets::{Block, BorderType, Paragraph, Wrap},
     Frame,
 };
 
@@ -44,7 +44,11 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     };
 
     let paragraph = Paragraph::new(lines)
-        .block(Block::bordered().title(title))
+        .block(
+            Block::bordered()
+                .border_type(BorderType::Rounded)
+                .title(title),
+        )
         .wrap(Wrap { trim: false });
     frame.render_widget(paragraph, area);
 }

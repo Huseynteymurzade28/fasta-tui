@@ -102,30 +102,71 @@ fn render_status(frame: &mut Frame, area: Rect, app: &App) {
         return;
     }
 
-    let matches = if app.search.matches.is_empty() {
-        String::new()
-    } else {
-        format!(
-            "  match {}/{}",
-            app.search.active + 1,
-            app.search.matches.len()
+    // Styled segments ("chips") read more clearly than one flat string.
+    let chip = |label: String, fg: Color, bg: Color| {
+        Span::styled(
+            format!(" {label} "),
+            Style::default().fg(fg).bg(bg).add_modifier(Modifier::BOLD),
         )
     };
-    let helix = if app.helix.paused { "paused" } else { "spin" };
-    let hint = format!(
-        " {}  pos {}/{}  frame +{}  {}  helix:{}{}   ?:help  q:quit",
-        if app.reverse { "rev-comp" } else { "forward" },
-        app.cursor,
-        app.record_len(),
-        app.frame,
-        app.theme.name(),
-        helix,
-        matches,
+    let field = |label: String| Span::styled(label, Style::default().fg(palette.text));
+
+    let base = app
+        .cursor_base()
+        .map(|c| c.to_string())
+        .unwrap_or_else(|| "·".to_string());
+
+    let mut spans = vec![
+        chip(
+            if app.reverse { "REV".into() } else { "FWD".into() },
+            Color::Black,
+            palette.accent,
+        ),
+        field(format!(
+            "  base {} @ {}/{}",
+            base,
+            app.cursor + 1,
+            app.record_len()
+        )),
+        field("   ".into()),
+        chip(format!("F+{}", app.frame), Color::Black, palette.base_g),
+        field("  ".into()),
+        chip(app.theme.name().into(), Color::Black, palette.base_c),
+        field("  ".into()),
+        if app.helix.paused {
+            chip("PAUSED".into(), Color::White, palette.stop_bg)
+        } else {
+            chip("SPIN".into(), Color::Black, palette.base_a)
+        },
+    ];
+
+    if !app.search.matches.is_empty() {
+        spans.push(field("  ".into()));
+        spans.push(chip(
+            format!(
+                "/{}  {}/{}",
+                app.search.query,
+                app.search.active + 1,
+                app.search.matches.len()
+            ),
+            Color::Black,
+            palette.match_bg,
+        ));
+    }
+
+    frame.render_widget(
+        Block::default().style(Style::default().fg(palette.text)),
+        area,
     );
-    let block = Block::default().style(Style::default().fg(palette.text));
-    let line = Line::from(hint);
-    frame.render_widget(block, area);
-    frame.render_widget(line, area);
+    frame.render_widget(Line::from(spans), area);
+
+    // Right-aligned key reminder.
+    let hint = Line::from(Span::styled(
+        "←/→ base  ↑/↓ row  ?:help  q:quit ",
+        Style::default().fg(palette.text).add_modifier(Modifier::DIM),
+    ))
+    .right_aligned();
+    frame.render_widget(hint, area);
 }
 
 /// A centered rectangle `pct_x` × `pct_y` of `area`, used for popups.

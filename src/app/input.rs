@@ -28,9 +28,15 @@ impl App {
                 }
             }
 
-            // Scrolling.
-            KeyCode::Down | KeyCode::Char('j') => self.scroll_down(),
-            KeyCode::Up | KeyCode::Char('k') => self.scroll_up(),
+            // Navigation: rows (↑/↓), single base (←/→), pages and ends.
+            KeyCode::Down | KeyCode::Char('j') => self.row_down(),
+            KeyCode::Up | KeyCode::Char('k') => self.row_up(),
+            KeyCode::Left | KeyCode::Char('h') => self.step_left(),
+            KeyCode::Right | KeyCode::Char('l') => self.step_right(),
+            KeyCode::PageDown => self.page_down(),
+            KeyCode::PageUp => self.page_up(),
+            KeyCode::Home | KeyCode::Char('g') => self.goto_start(),
+            KeyCode::End | KeyCode::Char('G') => self.goto_end(),
 
             // View switching.
             KeyCode::Char('1') => self.set_view(View::Reader),

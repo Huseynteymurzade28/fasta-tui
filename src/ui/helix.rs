@@ -9,7 +9,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{
         canvas::{Canvas, Line as CanvasLine, Points},
-        Block,
+        Block, BorderType,
     },
     Frame,
 };
@@ -32,7 +32,11 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         .collect();
 
     let canvas = Canvas::default()
-        .block(Block::bordered().title(" 3D Double Helix "))
+        .block(
+            Block::bordered()
+                .border_type(BorderType::Rounded)
+                .title(" 3D Double Helix "),
+        )
         .marker(Marker::Braille)
         .x_bounds([-1.7, 1.7])
         .y_bounds([0.0, 1.0])

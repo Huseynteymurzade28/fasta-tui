@@ -2,6 +2,8 @@
 
 pub mod input;
 
+use std::cell::Cell;
+
 use crate::fasta::Record;
 use crate::theme::Theme;
 
@@ -80,6 +82,26 @@ impl SearchState {
     }
 }
 
+/// Reader-pane geometry, measured during rendering and read back by the
+/// navigation keys so row / page movement matches what is on screen.
+#[derive(Debug, Clone, Copy)]
+pub struct ReaderMetrics {
+    /// Bases drawn on a single sequence row.
+    pub bases_per_row: usize,
+    /// Sequence rows visible in the viewport at once.
+    pub visible_rows: usize,
+}
+
+impl Default for ReaderMetrics {
+    fn default() -> Self {
+        // Sensible values for the first frame, before render measures the area.
+        ReaderMetrics {
+            bases_per_row: 60,
+            visible_rows: 20,
+        }
+    }
+}
+
 /// The complete UI state.
 pub struct App {
     pub records: Vec<Record>,
@@ -87,6 +109,11 @@ pub struct App {
     pub view: View,
     /// Scroll cursor measured in bases within the current record.
     pub cursor: usize,
+    /// Top row of the reader viewport (in sequence rows).
+    pub scroll_top: usize,
+    /// Reader geometry from the last render; updated through interior
+    /// mutability because rendering only holds `&App`.
+    pub metrics: Cell<ReaderMetrics>,
     pub theme: Theme,
     pub helix: HelixState,
     pub search: SearchState,
@@ -106,6 +133,8 @@ impl App {
             current: 0,
             view: View::Reader,
             cursor: 0,
+            scroll_top: 0,
+            metrics: Cell::new(ReaderMetrics::default()),
             theme: Theme::Neon,
             helix: HelixState::default(),
             search: SearchState::default(),
@@ -136,17 +165,79 @@ impl App {
         }
     }
 
-    // --- Scrolling -------------------------------------------------------
+    // --- Navigation ------------------------------------------------------
 
-    pub fn scroll_down(&mut self) {
-        let max = self.record_len().saturating_sub(1);
-        self.cursor = (self.cursor + SCROLL_STEP).min(max);
-        self.helix.phase += SCROLL_PHASE * SCROLL_STEP as f64;
+    /// The base currently under the cursor (uppercase ASCII), if any.
+    pub fn cursor_base(&self) -> Option<char> {
+        self.record().bases.get(self.cursor).map(|&b| b as char)
     }
 
-    pub fn scroll_up(&mut self) {
-        self.cursor = self.cursor.saturating_sub(SCROLL_STEP);
-        self.helix.phase -= SCROLL_PHASE * SCROLL_STEP as f64;
+    /// Move the cursor by `delta` bases, clamped to the record, rotating the
+    /// helix in proportion and keeping the viewport in sync.
+    pub fn move_cursor(&mut self, delta: isize) {
+        let max = self.record_len().saturating_sub(1) as isize;
+        if max < 0 {
+            return;
+        }
+        let target = (self.cursor as isize + delta).clamp(0, max);
+        let moved = target - self.cursor as isize;
+        if moved == 0 {
+            return;
+        }
+        self.cursor = target as usize;
+        self.helix.phase += SCROLL_PHASE * moved as f64;
+        self.ensure_visible();
+    }
+
+    /// Horizontal step: a single base left / right.
+    pub fn step_left(&mut self) {
+        self.move_cursor(-1);
+    }
+
+    pub fn step_right(&mut self) {
+        self.move_cursor(1);
+    }
+
+    /// Vertical step: one rendered row up / down.
+    pub fn row_up(&mut self) {
+        self.move_cursor(-(self.metrics.get().bases_per_row as isize));
+    }
+
+    pub fn row_down(&mut self) {
+        self.move_cursor(self.metrics.get().bases_per_row as isize);
+    }
+
+    /// One viewport page up / down.
+    pub fn page_up(&mut self) {
+        let m = self.metrics.get();
+        self.move_cursor(-((m.bases_per_row * m.visible_rows.max(1)) as isize));
+    }
+
+    pub fn page_down(&mut self) {
+        let m = self.metrics.get();
+        self.move_cursor((m.bases_per_row * m.visible_rows.max(1)) as isize);
+    }
+
+    pub fn goto_start(&mut self) {
+        self.move_cursor(isize::MIN / 2);
+    }
+
+    pub fn goto_end(&mut self) {
+        self.move_cursor(isize::MAX / 2);
+    }
+
+    /// Scroll the viewport so the cursor's row stays visible.
+    fn ensure_visible(&mut self) {
+        let m = self.metrics.get();
+        if m.bases_per_row == 0 {
+            return;
+        }
+        let row = self.cursor / m.bases_per_row;
+        if row < self.scroll_top {
+            self.scroll_top = row;
+        } else if m.visible_rows > 0 && row >= self.scroll_top + m.visible_rows {
+            self.scroll_top = row + 1 - m.visible_rows;
+        }
     }
 
     // --- Records ---------------------------------------------------------
@@ -169,6 +260,7 @@ impl App {
 
     fn reset_for_record(&mut self) {
         self.cursor = 0;
+        self.scroll_top = 0;
         self.recompute_matches();
     }
 
@@ -243,7 +335,7 @@ impl App {
         self.recompute_matches();
         if let Some(&pos) = self.search.matches.first() {
             self.search.active = 0;
-            self.cursor = pos;
+            self.jump_to(pos);
         }
     }
 
@@ -252,7 +344,7 @@ impl App {
             return;
         }
         self.search.active = (self.search.active + 1) % self.search.matches.len();
-        self.cursor = self.search.matches[self.search.active];
+        self.jump_to(self.search.matches[self.search.active]);
     }
 
     pub fn prev_match(&mut self) {
@@ -261,7 +353,13 @@ impl App {
         }
         let n = self.search.matches.len();
         self.search.active = (self.search.active + n - 1) % n;
-        self.cursor = self.search.matches[self.search.active];
+        self.jump_to(self.search.matches[self.search.active]);
+    }
+
+    /// Move the cursor to an absolute base index and reveal it.
+    fn jump_to(&mut self, pos: usize) {
+        self.cursor = pos.min(self.record_len().saturating_sub(1));
+        self.ensure_visible();
     }
 
     /// Recompute every motif occurrence in the current record.
@@ -284,7 +382,5 @@ impl App {
     }
 }
 
-/// How many bases we advance per scroll key press (one codon).
-pub const SCROLL_STEP: usize = 3;
-/// Phase rotation contributed per base when scrolling.
+/// Phase rotation contributed per base when the cursor moves.
 pub const SCROLL_PHASE: f64 = 0.08;
