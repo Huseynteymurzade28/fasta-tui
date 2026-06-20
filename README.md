@@ -38,6 +38,10 @@ inside your terminal.
 - **Reverse complement & reading frames** — flip to the 3'→5' strand and cycle
   reading frames 0/1/2; the helix, reader, and translation all follow.
 - **Multi-record files** — open multi-FASTA files and tab between records.
+- **Flexible input** — plain or gzip-compressed FASTA, reading from a file or
+  standard input (`-`), with RNA (`U`) and IUPAC ambiguity codes accepted.
+- **Protein export** — `--export-protein` translates every record to a protein
+  FASTA file (or stdout) headlessly, for use in scripts and pipelines.
 - **Themes** — three built-in color palettes (Neon, Pale, High-Contrast).
 
 ## Installation
@@ -62,20 +66,40 @@ cargo install --path .
 Pass the path to a FASTA file as the only argument:
 
 ```bash
-cargo run --release -- sample.fa
+cargo run --release -- samples/synthetic.fa
 # or, if installed:
-fasta-tui sample.fa
+fasta-tui samples/synthetic.fa
+
+# gzip files work as-is, and `-` reads from standard input:
+fasta-tui sequence.fasta.gz
+curl -s https://example.org/genome.fa | fasta-tui -
 ```
 
-A sample multi-record file (`sample.fa`) is included to try it out.
+A [`samples/`](samples/) folder with ready-to-use FASTA files — including a real
+GenBank record — is included to try it out. See [`samples/README.md`](samples/README.md).
 
 Supported input:
 
 - `.fasta` / `.fa` text files with one or more `>` header records.
+- Gzip-compressed input, detected by magic bytes (the `.gz` extension is optional).
+- Standard input via `-`, so `fasta-tui` slots into Unix pipelines.
 - Header-less raw sequence files (gathered into a single anonymous record).
 - Lower-case letters, whitespace, and line wrapping are all fine — the parser
-  uppercases input and keeps only `A`/`T`/`G`/`C` bytes, ignoring ambiguity
-  codes and gaps.
+  uppercases input, reads RNA `U` as `T`, keeps IUPAC ambiguity codes
+  (`N`, `R`, `Y`, …), and ignores gaps and digits.
+
+### Exporting protein translations
+
+Translate every record to protein and write a FASTA file without opening the
+TUI — handy for scripting:
+
+```bash
+# forward strand, reading frame 0, to a file
+fasta-tui sequence.fasta --export-protein proteins.faa
+
+# reverse strand in frame 1, straight to stdout
+fasta-tui sequence.fasta --export-protein - --reverse --frame 1
+```
 
 ## Key bindings
 
@@ -167,7 +191,7 @@ and `ui` is a stateless rendering layer that reads `&App` each frame.
 cargo build      # compile
 cargo test       # run the unit tests (parser, stats, translation)
 cargo clippy     # lint
-cargo run -- sample.fa
+cargo run -- samples/synthetic.fa
 ```
 
 The render loop polls for input on an 80 ms timeout and advances the helix

@@ -1,0 +1,6 @@
+>rna-transcript synthetic mRNA (U bases) — read as DNA, U shown as T
+AUGGCUACCAAGAUAUUAGCCCUCCUUGCGCUUCUUGCCCUUUUUGUGAGCGCAACAAAUGA
+>ambiguous synthetic read with IUPAC ambiguity codes (N/R/Y/S/W/K/M)
+ATGNNNCGRTAYGGSWWKKMATGCNNNNNTAGCGCRYSWKMBDHVNATGCATGCNNNTAA
+>low-quality-tails synthetic, runs of N at both ends like an unclipped read
+NNNNNNATGGCATTAGCCGGGTACCATGGATCCGGTAATAGCGCATGCNNNNNNNNNNNN

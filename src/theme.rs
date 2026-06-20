@@ -40,6 +40,7 @@ impl Theme {
                 base_t: Color::Rgb(255, 85, 85),
                 base_g: Color::Rgb(255, 184, 108),
                 base_c: Color::Rgb(139, 233, 253),
+                base_n: Color::Rgb(189, 147, 249),
                 start_bg: Color::Green,
                 stop_bg: Color::Red,
                 match_bg: Color::Rgb(241, 250, 140),
@@ -56,6 +57,7 @@ impl Theme {
                 base_t: Color::Rgb(220, 150, 150),
                 base_g: Color::Rgb(220, 190, 150),
                 base_c: Color::Rgb(150, 190, 210),
+                base_n: Color::Rgb(180, 160, 200),
                 start_bg: Color::Rgb(80, 140, 80),
                 stop_bg: Color::Rgb(160, 80, 80),
                 match_bg: Color::Rgb(200, 200, 120),
@@ -72,6 +74,7 @@ impl Theme {
                 base_t: Color::Red,
                 base_g: Color::Yellow,
                 base_c: Color::Cyan,
+                base_n: Color::Magenta,
                 start_bg: Color::Green,
                 stop_bg: Color::Red,
                 match_bg: Color::Yellow,
@@ -94,6 +97,7 @@ pub struct Palette {
     pub base_t: Color,
     pub base_g: Color,
     pub base_c: Color,
+    pub base_n: Color,
     pub start_bg: Color,
     pub stop_bg: Color,
     pub match_bg: Color,
@@ -101,13 +105,15 @@ pub struct Palette {
 }
 
 impl Palette {
-    /// Neon color for a base letter, keyed by nucleotide.
+    /// Color for a base letter, keyed by nucleotide. IUPAC ambiguity codes
+    /// share the `base_n` hue so they stand out from the four plain bases.
     pub fn base_color(&self, base: char) -> Color {
         match base {
             'A' => self.base_a,
             'T' => self.base_t,
             'G' => self.base_g,
             'C' => self.base_c,
+            'N' | 'R' | 'Y' | 'S' | 'W' | 'K' | 'M' | 'B' | 'D' | 'H' | 'V' => self.base_n,
             _ => self.text,
         }
     }

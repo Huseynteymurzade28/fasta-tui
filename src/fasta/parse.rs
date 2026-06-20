@@ -1,20 +1,61 @@
 //! Streaming FASTA parser supporting multi-record files.
 
 use std::fs;
-use std::io;
+use std::io::{self, Read};
 use std::path::Path;
 
 use super::record::Record;
 
-/// Parse a FASTA file into one [`Record`] per `>` header.
+/// Read and parse a FASTA source into one [`Record`] per `>` header.
+///
+/// The `path` may be:
+/// - a regular `.fasta` / `.fa` file,
+/// - a gzip-compressed file (detected by magic bytes, so the `.gz` extension is
+///   optional), or
+/// - `-`, meaning read from standard input (also gzip-aware).
 ///
 /// Header (`>`) lines start a new record; every following line contributes its
-/// `A`/`T`/`G`/`C` bytes (case-insensitively) until the next header. Whitespace
-/// and ambiguity codes are ignored. Sequence data before any header is gathered
-/// into an anonymous record so raw, header-less files still work.
+/// nucleotide bytes (case-insensitively) until the next header. `U`/`u` is read
+/// as `T` so RNA is accepted, IUPAC ambiguity codes (`N`, `R`, `Y`, …) are kept,
+/// and whitespace, gaps and digits are ignored. Sequence data before any header
+/// is gathered into an anonymous record so raw, header-less files still work.
 pub fn parse_file(path: &Path) -> io::Result<Vec<Record>> {
-    let raw = fs::read_to_string(path)?;
-    Ok(parse_str(&raw))
+    let bytes = if path == Path::new("-") {
+        let mut buf = Vec::new();
+        io::stdin().lock().read_to_end(&mut buf)?;
+        buf
+    } else {
+        fs::read(path)?
+    };
+    let bytes = maybe_gunzip(bytes)?;
+    let text = String::from_utf8_lossy(&bytes);
+    Ok(parse_str(&text))
+}
+
+/// Transparently decompress gzip input, leaving plain text untouched. Gzip is
+/// recognized by its two magic bytes rather than the file name.
+fn maybe_gunzip(bytes: Vec<u8>) -> io::Result<Vec<u8>> {
+    if bytes.starts_with(&[0x1f, 0x8b]) {
+        let mut out = Vec::new();
+        flate2::read::GzDecoder::new(&bytes[..]).read_to_end(&mut out)?;
+        Ok(out)
+    } else {
+        Ok(bytes)
+    }
+}
+
+/// Normalize a raw sequence byte to a stored base, or `None` to drop it.
+///
+/// Uppercases the byte, maps `U` (RNA) to `T`, and keeps the IUPAC nucleotide
+/// alphabet — the four bases plus ambiguity codes. Everything else (whitespace,
+/// gaps, digits, stray punctuation) is discarded.
+fn clean_base(byte: u8) -> Option<u8> {
+    match byte.to_ascii_uppercase() {
+        b'U' => Some(b'T'),
+        b @ (b'A' | b'T' | b'G' | b'C' | b'N' | b'R' | b'Y' | b'S' | b'W' | b'K' | b'M'
+        | b'B' | b'D' | b'H' | b'V') => Some(b),
+        _ => None,
+    }
 }
 
 /// Parse FASTA text already held in memory.
@@ -32,12 +73,7 @@ pub fn parse_str(text: &str) -> Vec<Record> {
             records.push(Record::new("unnamed"));
         }
         let current = records.last_mut().expect("record present");
-        for ch in line.bytes() {
-            match ch.to_ascii_uppercase() {
-                b @ (b'A' | b'T' | b'G' | b'C') => current.bases.push(b),
-                _ => {}
-            }
-        }
+        current.bases.extend(line.bytes().filter_map(clean_base));
     }
 
     // Drop a leading anonymous record if it never received any bases.
@@ -68,5 +104,12 @@ mod tests {
         let recs = parse_str("ATGCATGC\n");
         assert_eq!(recs.len(), 1);
         assert_eq!(recs[0].bases, b"ATGCATGC");
+    }
+
+    #[test]
+    fn rna_is_read_as_dna_and_ambiguity_kept() {
+        // U -> T, ambiguity codes preserved, gaps/digits dropped.
+        let recs = parse_str(">r\nAUGN-RYK..123\n");
+        assert_eq!(recs[0].bases, b"ATGNRYK");
     }
 }

@@ -1,13 +1,14 @@
 //! A single FASTA record: a header plus its nucleotide sequence.
 
-/// One FASTA entry. Bases are stored as uppercase ASCII (`A`, `T`, `G`, `C`).
+/// One FASTA entry. Bases are stored as uppercase ASCII: the four nucleotides
+/// (`A`, `T`, `G`, `C`) plus any IUPAC ambiguity codes (`N`, `R`, `Y`, …).
 #[derive(Debug, Clone)]
 pub struct Record {
     /// First whitespace-delimited token of the header (the accession / id).
     pub id: String,
     /// Remainder of the header line, if any.
     pub description: String,
-    /// Cleaned sequence: only `A`/`T`/`G`/`C` bytes.
+    /// Cleaned sequence: uppercase IUPAC nucleotide bytes.
     pub bases: Vec<u8>,
 }
 
@@ -38,13 +39,23 @@ impl Record {
         self.bases.get(index).map(|&b| b as char).unwrap_or(' ')
     }
 
-    /// Watson–Crick complement of a single base byte.
+    /// Watson–Crick complement of a single base byte, including IUPAC ambiguity
+    /// codes (e.g. `R`=A/G complements to `Y`=C/T). Unknown bytes pass through.
     pub fn complement(base: u8) -> u8 {
         match base {
             b'A' => b'T',
             b'T' => b'A',
             b'G' => b'C',
             b'C' => b'G',
+            b'R' => b'Y',
+            b'Y' => b'R',
+            b'K' => b'M',
+            b'M' => b'K',
+            b'B' => b'V',
+            b'V' => b'B',
+            b'D' => b'H',
+            b'H' => b'D',
+            // Self-complementary: S (G/C), W (A/T), N (any).
             other => other,
         }
     }

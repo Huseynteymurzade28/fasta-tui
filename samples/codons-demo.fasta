@@ -1,0 +1,6 @@
+>orf-demo synthetic ORF: clean ATG ... TAA frame-0 reading frame
+ATGGCTGCAAAAGGTTGCGATGAACAGCTGAAATTTCCGGGCTGGTATAACGATTAA
+>multi-start synthetic, several ATG start codons for motif/codon highlighting
+ATGCCCATGGGGATGTTTATGAAACCCGGGATGTAGATGCATGCATGCATGCTAAATG
+>all-stops synthetic, demonstrates TAA / TAG / TGA stop highlighting
+ATGAAATAAGGGTAGCCCTGAATTTATGCCCTAAGGGTAGAAATGACCCTAAGGGTGA
