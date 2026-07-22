@@ -1,7 +1,9 @@
 //! Rendering layer: top-level layout, tab bar, status line and popups.
 
+mod enzymes;
 mod helix;
 mod help;
+mod orf;
 mod protein;
 mod reader;
 mod stats;
@@ -33,6 +35,8 @@ pub fn draw(frame: &mut Frame, app: &App) {
         View::Reader => reader::render(frame, rows[1], app),
         View::Stats => stats::render(frame, rows[1], app),
         View::Protein => protein::render(frame, rows[1], app),
+        View::Orf => orf::render(frame, rows[1], app),
+        View::Enzymes => enzymes::render(frame, rows[1], app),
     }
 
     render_status(frame, rows[2], app);
@@ -94,8 +98,21 @@ fn render_status(frame: &mut Frame, area: Rect, app: &App) {
             Span::styled("SEARCH", Style::default().fg(Color::Black).bg(palette.accent)),
             Span::styled(prompt, Style::default().fg(palette.accent)),
             Span::styled(
-                "   (Enter: confirm  Esc: cancel  A/T/G/C only)",
+                "   (Enter: confirm  Esc: cancel  IUPAC codes A/C/G/T/N/R/Y/… accepted)",
                 Style::default().fg(palette.text),
+            ),
+        ]);
+        frame.render_widget(line, area);
+        return;
+    }
+
+    // A transient message (copy confirmation, hit counts) takes the line over.
+    if let Some(msg) = app.flash_message() {
+        let line = Line::from(vec![
+            Span::styled(" ▸ ", Style::default().fg(palette.accent)),
+            Span::styled(
+                msg.to_string(),
+                Style::default().fg(palette.accent).add_modifier(Modifier::BOLD),
             ),
         ]);
         frame.render_widget(line, area);
@@ -140,12 +157,29 @@ fn render_status(frame: &mut Frame, area: Rect, app: &App) {
         },
     ];
 
+    if let Some((lo, hi)) = app.selection.range(app.cursor) {
+        spans.push(field("  ".into()));
+        spans.push(chip(
+            format!("SEL {}..{} ({} nt)", lo + 1, hi.min(app.record_len()), hi - lo),
+            Color::Black,
+            palette.match_bg,
+        ));
+    }
+
     if !app.search.matches.is_empty() {
+        let label = app
+            .search
+            .label
+            .as_deref()
+            .map(|l| format!("{l} "))
+            .unwrap_or_default();
+        let strands = if app.search.both_strands { "±" } else { "+" };
         spans.push(field("  ".into()));
         spans.push(chip(
             format!(
-                "/{}  {}/{}",
+                "{label}/{}{}  {}/{}",
                 app.search.query,
+                strands,
                 app.search.active + 1,
                 app.search.matches.len()
             ),
@@ -167,6 +201,17 @@ fn render_status(frame: &mut Frame, area: Rect, app: &App) {
     ))
     .right_aligned();
     frame.render_widget(hint, area);
+}
+
+/// The half-open slice of a `total`-row list to draw so that `selected` stays
+/// visible in a viewport `height` rows tall.
+pub fn scroll_window(selected: usize, total: usize, height: usize) -> (usize, usize) {
+    if height == 0 || total == 0 {
+        return (0, 0);
+    }
+    // Keep the selection centred once the list is long enough to scroll.
+    let first = selected.saturating_sub(height / 2).min(total.saturating_sub(height));
+    (first, (first + height).min(total))
 }
 
 /// A centered rectangle `pct_x` × `pct_y` of `area`, used for popups.

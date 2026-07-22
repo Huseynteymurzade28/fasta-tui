@@ -10,33 +10,62 @@ use ratatui::{
 use super::centered_rect;
 use crate::app::App;
 
+/// `(keys, description)` pairs; an empty key string starts a new section whose
+/// description is the heading.
 const BINDINGS: &[(&str, &str)] = &[
+    ("", "Navigation"),
     ("←/h, →/l", "Move cursor one base"),
     ("↑/k, ↓/j", "Move cursor one row"),
     ("PgUp / PgDn", "Move one page"),
     ("Home/g, End/G", "Jump to start / end"),
-    ("1 / 2 / 3", "Switch view: Reader / Stats / Protein"),
     ("Tab / ]", "Next FASTA record"),
     ("BackTab / [", "Previous FASTA record"),
-    ("/", "Search a motif (A/T/G/C)"),
+    ("", "Views"),
+    ("1 … 5", "Reader / Stats / Protein / ORFs / Enzymes"),
+    ("r", "Toggle reverse-complement strand"),
+    ("f", "Cycle reading frame 0/1/2"),
+    ("t", "Cycle color theme"),
+    ("", "Search"),
+    ("/", "Search a motif (any IUPAC code)"),
     ("n / N", "Jump to next / previous match"),
+    ("b", "Toggle reverse-complement matching"),
+    ("", "Selection"),
+    ("v", "Start / drop a selection at the cursor"),
+    ("y", "Copy selection (or ORF) to the clipboard"),
+    ("", "ORF table (view 4)"),
+    ("↑ / ↓", "Select an ORF"),
+    ("Enter", "Show it in the reader, selected"),
+    ("m / M", "Lower / raise the minimum ORF length"),
+    ("", "Enzyme table (view 5)"),
+    ("↑ / ↓", "Select an enzyme"),
+    ("Enter", "Find its sites in the reader"),
+    ("u", "Show only enzymes that cut"),
+    ("", "Helix"),
     ("Space", "Pause / resume helix spin"),
     ("+ / -", "Helix spin faster / slower"),
     ("> / <", "More / less helix twist"),
-    ("r", "Toggle reverse-complement (Protein)"),
-    ("f", "Cycle reading frame 0/1/2"),
-    ("t", "Cycle color theme"),
+    ("", "Other"),
     ("?", "Toggle this help"),
-    ("q / Esc", "Quit"),
+    ("Esc", "Close help / drop selection / clear search"),
+    ("q", "Quit"),
 ];
 
 pub fn render(frame: &mut Frame, app: &App) {
     let palette = app.theme.palette();
-    let area = centered_rect(60, 70, frame.area());
+    // The list is long enough that the overlay wants most of the screen.
+    let area = centered_rect(64, 94, frame.area());
 
     let mut lines: Vec<Line> = Vec::with_capacity(BINDINGS.len() + 2);
-    lines.push(Line::from(""));
     for (keys, desc) in BINDINGS {
+        if keys.is_empty() {
+            lines.push(Line::from(Span::styled(
+                format!(" {desc}"),
+                Style::default()
+                    .fg(palette.match_bg)
+                    .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+            )));
+            continue;
+        }
         lines.push(Line::from(vec![
             Span::styled(
                 format!("  {keys:<14}"),

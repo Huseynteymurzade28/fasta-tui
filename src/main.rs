@@ -27,9 +27,16 @@ fn main() -> io::Result<()> {
     let cli = Cli::parse_args();
     let records = fasta::parse_file(&cli.file)?;
 
-    // Headless mode: translate to protein and exit without touching the screen.
+    // Headless modes: produce a file or a report and exit without touching the
+    // screen, so the tool composes with scripts and pipelines.
     if let Some(out) = &cli.export_protein {
         return export_protein(&records, cli.frame as usize, cli.reverse, out);
+    }
+    if let Some(out) = &cli.export_orfs {
+        return export_orfs(&records, cli.min_orf, out);
+    }
+    if cli.restriction_map {
+        return print_restriction_map(&records);
     }
 
     let mut app = App::new(records);
@@ -73,6 +80,78 @@ fn export_protein(records: &[Record], frame: usize, reverse: bool, out: &Path) -
         );
         Ok(())
     }
+}
+
+/// Find every ORF of at least `min_aa` residues in each record and write them
+/// as a protein FASTA file — or to stdout when `out` is `-`.
+fn export_orfs(records: &[Record], min_aa: usize, out: &Path) -> io::Result<()> {
+    let mut buf = String::new();
+    let mut total = 0usize;
+    for rec in records {
+        for (i, orf) in fasta::orf::find_orfs(&rec.bases, min_aa).iter().enumerate() {
+            total += 1;
+            buf.push_str(&format!(
+                ">{}_orf{} strand={} frame={} start={} end={} len={}aa{}\n",
+                rec.id,
+                i + 1,
+                orf.strand.symbol(),
+                orf.frame + 1,
+                orf.start + 1,
+                orf.end,
+                orf.aa_len,
+                if orf.has_stop { "" } else { " partial" },
+            ));
+            let protein = orf.protein(&rec.bases);
+            for chunk in protein.as_bytes().chunks(60) {
+                buf.push_str(&String::from_utf8_lossy(chunk));
+                buf.push('\n');
+            }
+        }
+    }
+
+    if out == Path::new("-") {
+        io::stdout().write_all(buf.as_bytes())
+    } else {
+        std::fs::write(out, buf)?;
+        eprintln!("Wrote {total} ORF(s) ≥{min_aa} aa to {}", out.display());
+        Ok(())
+    }
+}
+
+/// Print a TSV restriction map: one row per record and enzyme that cuts.
+fn print_restriction_map(records: &[Record]) -> io::Result<()> {
+    let mut out = io::stdout().lock();
+    writeln!(out, "record\tenzyme\tsite\tsites\tpositions\tfragments")?;
+    for rec in records {
+        for d in fasta::enzymes::digest_all(&rec.bases) {
+            if d.count() == 0 {
+                continue;
+            }
+            let positions = d
+                .cuts()
+                .iter()
+                .map(|c| (c + 1).to_string())
+                .collect::<Vec<_>>()
+                .join(",");
+            let frags = d
+                .fragments(rec.len())
+                .iter()
+                .map(|f| f.to_string())
+                .collect::<Vec<_>>()
+                .join(",");
+            writeln!(
+                out,
+                "{}\t{}\t{}\t{}\t{}\t{}",
+                rec.id,
+                d.enzyme.name,
+                d.enzyme.site_with_cut(),
+                d.count(),
+                positions,
+                frags
+            )?;
+        }
+    }
+    Ok(())
 }
 
 /// The main event loop. Polls with a timeout so the helix keeps spinning even

@@ -23,6 +23,19 @@ pub struct Cli {
     /// Translate the reverse-complement strand for --export-protein.
     #[arg(long)]
     pub reverse: bool,
+
+    /// Find ORFs in all six frames and write them as a protein FASTA file,
+    /// then exit without opening the TUI. Use `-` for standard output.
+    #[arg(long, value_name = "FILE")]
+    pub export_orfs: Option<PathBuf>,
+
+    /// Shortest ORF to report, in amino acids.
+    #[arg(long, default_value_t = crate::app::DEFAULT_MIN_ORF_AA, value_name = "AA")]
+    pub min_orf: usize,
+
+    /// Print a restriction map (one TSV row per enzyme) and exit.
+    #[arg(long)]
+    pub restriction_map: bool,
 }
 
 impl Cli {

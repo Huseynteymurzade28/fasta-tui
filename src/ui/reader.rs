@@ -32,9 +32,15 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
 
 fn render_left(frame: &mut Frame, area: Rect, app: &App) {
     let palette = app.theme.palette();
+    // The selection panel only claims height while a selection exists.
+    let sel_height = if app.selection.active { 3 } else { 0 };
     let rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(3), Constraint::Min(0)])
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Min(0),
+            Constraint::Length(sel_height),
+        ])
         .split(area);
 
     // --- GC content gauge ---------------------------------------------------
@@ -104,6 +110,74 @@ fn render_left(frame: &mut Frame, area: Rect, app: &App) {
             &mut sb_state,
         );
     }
+
+    if app.selection.active {
+        render_selection_panel(frame, rows[2], app);
+    }
+}
+
+/// The oligo panel under the reader: length, composition and melting
+/// temperature for whatever the user has selected.
+fn render_selection_panel(frame: &mut Frame, area: Rect, app: &App) {
+    let palette = app.theme.palette();
+    let Some((lo, hi)) = app.selection.range(app.cursor) else {
+        return;
+    };
+    let hi = hi.min(app.record_len());
+
+    let title = format!(
+        " Selection — {}..{} on the {} strand  [y: copy  Esc: clear] ",
+        lo + 1,
+        hi,
+        if app.reverse { "reverse" } else { "forward" }
+    );
+
+    let line = match app.selection_stats() {
+        Some(s) => {
+            let key = |t: &str| {
+                Span::styled(
+                    format!(" {t} "),
+                    Style::default().fg(palette.accent).add_modifier(Modifier::DIM),
+                )
+            };
+            let val = |t: String| {
+                Span::styled(t, Style::default().fg(palette.text).add_modifier(Modifier::BOLD))
+            };
+            // The nearest-neighbour Tm is the one to trust; Wallace is shown as
+            // a sanity check and is all we have for ambiguous sequence.
+            let tm = match s.tm_nn {
+                Some(tm) => format!("{tm:.1} °C (NN)"),
+                None => format!("{:.1} °C (Wallace)", s.tm_wallace),
+            };
+            let mut spans = vec![
+                key("len"),
+                val(format!("{} nt", s.len)),
+                key("  GC"),
+                val(format!("{:.1}%", s.gc * 100.0)),
+                key("  Tm"),
+                val(tm),
+                key("  MW"),
+                val(format!("{:.1} kDa", s.mw / 1000.0)),
+            ];
+            if s.ambiguous > 0 {
+                spans.push(key("  ambiguous"));
+                spans.push(val(format!("{}", s.ambiguous)));
+            }
+            Line::from(spans)
+        }
+        None => Line::from(Span::styled(
+            " empty selection",
+            Style::default().fg(palette.text),
+        )),
+    };
+
+    let panel = Paragraph::new(line).block(
+        Block::bordered()
+            .border_type(BorderType::Rounded)
+            .title(title)
+            .border_style(Style::default().fg(palette.match_bg)),
+    );
+    frame.render_widget(panel, area);
 }
 
 /// Build codon- and motif-highlighted rows for the current record.
@@ -148,26 +222,44 @@ fn build_reader_lines(app: &App, palette: &Palette, bases_per_row: usize) -> Vec
         }
     }
 
-    // 3. Motif matches override codon backgrounds.
-    let qlen = app.search.query_len();
-    if qlen > 0 {
-        for &start in &app.search.matches {
-            let end = (start + qlen).min(seq.len());
-            styles[start..end].fill(
-                Style::default()
-                    .bg(palette.match_bg)
-                    .fg(Color::Black)
-                    .add_modifier(Modifier::BOLD),
-            );
+    // 3. Motif matches override codon backgrounds. Minus-strand hits are
+    //    underlined so they read apart from plus-strand ones.
+    let active = app.search.active_match();
+    for m in &app.search.matches {
+        let end = m.end().min(seq.len());
+        let mut style = Style::default()
+            .bg(palette.match_bg)
+            .fg(Color::Black)
+            .add_modifier(Modifier::BOLD);
+        if m.revcomp {
+            style = style.add_modifier(Modifier::UNDERLINED);
+        }
+        // The hit n/N is currently sitting on gets the accent background.
+        if Some(*m) == active {
+            style = style.bg(palette.accent);
+        }
+        styles[m.start..end].fill(style);
+    }
+
+    // 4. The selection dims everything it does not cover, so the picked range
+    //    stands out without repainting it.
+    if let Some((lo, hi)) = app.selection.range(app.cursor) {
+        let hi = hi.min(seq.len());
+        for (i, style) in styles.iter_mut().enumerate() {
+            if i < lo || i >= hi {
+                *style = style.add_modifier(Modifier::DIM);
+            } else {
+                *style = style.add_modifier(Modifier::UNDERLINED);
+            }
         }
     }
 
-    // 4. Cursor marker.
+    // 5. Cursor marker.
     if app.cursor < seq.len() {
         styles[app.cursor] = styles[app.cursor].add_modifier(Modifier::REVERSED);
     }
 
-    // 5. Emit fixed-width rows: a position gutter, then 10-base groups split by
+    // 6. Emit fixed-width rows: a position gutter, then 10-base groups split by
     //    a thin space so the eye can count along the strand.
     let gutter_style = Style::default().fg(palette.accent).add_modifier(Modifier::DIM);
     let sep_style = Style::default().fg(palette.rung);

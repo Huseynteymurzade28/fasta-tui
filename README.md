@@ -2,11 +2,12 @@
 
 A terminal viewer for FASTA DNA sequences, built with [Ratatui](https://ratatui.rs).
 It pairs a color-coded sequence browser with an animated, depth-shaded Braille
-double helix, plus composition statistics and live amino-acid translation — all
-inside your terminal.
+double helix, plus composition statistics, live amino-acid translation, a
+six-frame ORF finder, a restriction map and primer-grade melting temperatures —
+all inside your terminal.
 
 ```
-┌ 1:Reader  2:Stats  3:Protein ─────────────────────  seq1 [1/3] ┐
+┌ 1:Reader 2:Stats 3:Protein 4:ORFs 5:Enzymes ───────  seq1 [1/3] ┐
 │ ╭ GC Content — synthetic construct ──────────────╮  ╭ 3D Double Helix ╮
 │ │ 54.0%  (180 bases)  ████████████░░░░░░░░░░░░░░ │  │      A⠂⠐T        │
 │ ╰────────────────────────────────────────────────╯  │     ⠈C   G⠠      │
@@ -33,8 +34,19 @@ inside your terminal.
 - **Protein view** — live translation of the selected strand and reading frame
   using the standard genetic code, with start (`M`) and stop (`*`) residues
   highlighted.
-- **Motif search** — incremental `A/T/G/C` motif search across the current
-  record, with match highlighting and jump-to-next/previous navigation.
+- **ORF finder** — a six-frame open reading frame table, sorted longest first,
+  with the encoded protein beside it. `Enter` drops you at that ORF in the
+  reader with its strand and frame already dialled in.
+- **Motif search** — incremental motif search accepting the full IUPAC alphabet
+  (`N`, `R`, `Y`, `W`, …), optionally matching the reverse complement too, with
+  match highlighting and jump-to-next/previous navigation.
+- **Restriction map** — 31 common type-II enzymes digested against the current
+  record: site counts, cut positions, linear fragment sizes, blunt/sticky ends,
+  and unique cutters flagged for cloning. `Enter` searches a site in the reader.
+- **Selection & primer stats** — mark a range with `v`, and the reader reports
+  its length, GC content, nearest-neighbour melting temperature (SantaLucia
+  1998, salt-corrected) and molecular weight. `y` copies it as FASTA to the
+  system clipboard over OSC 52 — no clipboard daemon, works over SSH.
 - **Reverse complement & reading frames** — flip to the 3'→5' strand and cycle
   reading frames 0/1/2; the helix, reader, and translation all follow.
 - **Multi-record files** — open multi-FASTA files and tab between records.
@@ -101,6 +113,37 @@ fasta-tui sequence.fasta --export-protein proteins.faa
 fasta-tui sequence.fasta --export-protein - --reverse --frame 1
 ```
 
+### Finding ORFs headlessly
+
+```bash
+# every ORF of 60+ amino acids in all six frames, as protein FASTA
+fasta-tui sequence.fasta --export-orfs orfs.faa --min-orf 60
+
+# straight to stdout, so it pipes
+fasta-tui sequence.fasta --export-orfs - | grep '^>'
+```
+
+Each header records the strand, frame, span and length:
+
+```
+>X55661.1_orf1 strand=+ frame=3 start=12 end=407 len=131aa
+```
+
+### Restriction mapping headlessly
+
+`--restriction-map` prints one TSV row per enzyme that cuts, ready for `awk`,
+`cut` or a spreadsheet:
+
+```bash
+fasta-tui sequence.fasta --restriction-map
+```
+
+```
+record     enzyme  site      sites  positions        fragments
+X55661.1   AluI    AG^CT     6      163,388,562,…    162,225,174,11,4,32,304
+X55661.1   ClaI    AT^CGAT   1      832              831,81
+```
+
 ## Key bindings
 
 Press `?` at any time to toggle the in-app key reference.
@@ -120,7 +163,7 @@ Press `?` at any time to toggle the in-app key reference.
 
 | Key | Action |
 | --- | --- |
-| `1` / `2` / `3` | Switch view: Reader / Stats / Protein |
+| `1` … `5` | Switch view: Reader / Stats / Protein / ORFs / Enzymes |
 | `r` | Toggle reverse-complement strand |
 | `f` | Cycle reading frame 0 / 1 / 2 |
 | `t` | Cycle color theme |
@@ -129,8 +172,36 @@ Press `?` at any time to toggle the in-app key reference.
 
 | Key | Action |
 | --- | --- |
-| `/` | Start a motif search (type `A`/`T`/`G`/`C`, `Enter` to confirm, `Esc` to cancel) |
+| `/` | Start a motif search (any IUPAC code, `Enter` to confirm, `Esc` to cancel) |
 | `n` / `N` | Jump to the next / previous match |
+| `b` | Toggle reverse-complement matching (minus-strand hits are underlined) |
+
+### Selection
+
+| Key | Action |
+| --- | --- |
+| `v` | Start a selection at the cursor, or drop the current one |
+| `y` | Copy the selection (or, in the ORF view, its protein) to the clipboard |
+
+Everything outside the selection dims, and a panel under the reader shows the
+length, GC content, melting temperature and molecular weight of what you picked.
+
+### ORF table (view `4`)
+
+| Key | Action |
+| --- | --- |
+| `↑` / `↓` | Select an ORF |
+| `Enter` | Show it in the reader, selected, on its own strand and frame |
+| `m` / `M` | Lower / raise the minimum ORF length by 10 aa |
+| `y` | Copy the ORF's protein as FASTA |
+
+### Enzyme table (view `5`)
+
+| Key | Action |
+| --- | --- |
+| `↑` / `↓` | Select an enzyme |
+| `Enter` | Search its recognition site in the reader |
+| `u` | Show only the enzymes that actually cut |
 
 ### Helix controls
 
@@ -145,7 +216,8 @@ Press `?` at any time to toggle the in-app key reference.
 | Key | Action |
 | --- | --- |
 | `?` | Toggle the help overlay |
-| `q` / `Esc` | Quit |
+| `Esc` | Close the help, else drop the selection, else clear the search, else quit |
+| `q` | Quit |
 
 ## Status bar
 
@@ -155,7 +227,10 @@ The bottom line summarizes the current state as color-coded chips:
 - `base X @ pos/len` — the nucleotide under the cursor and its 1-based position.
 - `F+n` — the active reading frame.
 - theme name and `SPIN` / `PAUSED` for the helix.
-- `/motif  i/total` — appears while a search has matches.
+- `SEL a..b (n nt)` — the active selection.
+- `/motif±  i/total` — appears while a search has matches; `±` means both
+  strands are being matched.
+- Transient messages (copy confirmations, hit counts) briefly take the line over.
 
 ## Project layout
 
@@ -168,16 +243,23 @@ src/
 │   ├── parse.rs       # multi-record FASTA parser
 │   ├── record.rs      # Record model, complement / reverse-complement
 │   ├── stats.rs       # base counts, GC content, sliding-window GC
-│   └── translate.rs   # codon → amino-acid translation (standard code)
+│   ├── translate.rs   # codon → amino-acid translation (standard code)
+│   ├── iupac.rs       # ambiguity-code aware pattern matching
+│   ├── orf.rs         # six-frame open reading frame detection
+│   ├── enzymes.rs     # restriction enzyme table + digestion
+│   └── oligo.rs       # Tm (nearest-neighbour / Wallace), MW, composition
 ├── app/               # application state + input handling
-│   ├── mod.rs         # App state, navigation, search, toggles
-│   └── input.rs       # key-event → state mutation mapping
+│   ├── mod.rs         # App state, navigation, search, ORFs, selection
+│   ├── input.rs       # key-event → state mutation mapping
+│   └── clipboard.rs   # OSC 52 clipboard copy (no external dependency)
 └── ui/                # rendering layer (Ratatui)
     ├── mod.rs         # top-level layout, tab bar, status line
     ├── reader.rs      # sequence reader + GC gauge + scrollbar
     ├── helix.rs       # the 3D Braille double helix
     ├── stats.rs       # composition + GC charts
     ├── protein.rs     # amino-acid translation view
+    ├── orf.rs         # ORF table + encoded protein
+    ├── enzymes.rs     # restriction map + cut sites
     └── help.rs        # key-binding overlay
 ```
 
@@ -189,7 +271,7 @@ and `ui` is a stateless rendering layer that reads `&App` each frame.
 
 ```bash
 cargo build      # compile
-cargo test       # run the unit tests (parser, stats, translation)
+cargo test       # run the unit tests (parser, stats, translation, ORFs, enzymes, Tm)
 cargo clippy     # lint
 cargo run -- samples/synthetic.fa
 ```
