@@ -1,23 +1,18 @@
 # fasta-tui
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Rust](https://img.shields.io/badge/Rust-2021-orange.svg?logo=rust)](https://www.rust-lang.org)
+[![Built with Ratatui](https://img.shields.io/badge/Built%20with-Ratatui-000000.svg)](https://ratatui.rs)
+
 A terminal viewer for FASTA DNA sequences, built with [Ratatui](https://ratatui.rs).
 It pairs a color-coded sequence browser with an animated, depth-shaded Braille
 double helix, plus composition statistics, live amino-acid translation, a
 six-frame ORF finder, a restriction map and primer-grade melting temperatures —
 all inside your terminal.
 
-```
-┌ 1:Reader 2:Stats 3:Protein 4:ORFs 5:Enzymes ───────  seq1 [1/3] ┐
-│ ╭ GC Content — synthetic construct ──────────────╮  ╭ 3D Double Helix ╮
-│ │ 54.0%  (180 bases)  ████████████░░░░░░░░░░░░░░ │  │      A⠂⠐T        │
-│ ╰────────────────────────────────────────────────╯  │     ⠈C   G⠠      │
-│ ╭ Sequence (A·T·G·C colored, ATG=start … ) ──────╮▲  │    G⠐     T⠂     │
-│ │      1 │ ATGGCATTAG CCGGGTACCA TGGATCCGGT …    ┃  │     ⠈T   A⠠      │
-│ │     61 │ ATGAAACCCG GGTTTTAAGC GCGCATATGC …    ┃  │      C⠂⠐G        │
-│ ╰────────────────────────────────────────────────╯▼  ╰─────────────────╯
-│  FWD   base A @ 1/180    F+0   Neon   SPIN        ←/→ base  ↑/↓ row  ?:help q:quit
-└────────────────────────────────────────────────────────────────────────┘
-```
+<p align="center">
+  <img src="assets/screenshot-reader.png" alt="fasta-tui reader view — a color-coded sequence browser beside a rotating 3D Braille double helix" width="900">
+</p>
 
 ## Features
 
@@ -56,12 +51,33 @@ all inside your terminal.
   FASTA file (or stdout) headlessly, for use in scripts and pipelines.
 - **Themes** — three built-in color palettes (Neon, Pale, High-Contrast).
 
+## Screenshots
+
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="assets/screenshot-stats.png" alt="Stats view: base-composition bar chart and a GC-content sliding-window line chart">
+      <p align="center"><em>Stats — base composition &amp; GC sliding window</em></p>
+    </td>
+    <td width="50%" valign="top">
+      <img src="assets/screenshot-orfs.png" alt="ORF finder: a six-frame open reading frame table with the encoded protein alongside">
+      <p align="center"><em>ORF finder — six frames, longest first, with translation</em></p>
+    </td>
+  </tr>
+  <tr>
+    <td colspan="2" valign="top">
+      <img src="assets/screenshot-enzymes.png" alt="Restriction map: type-II enzymes digested against the record with site counts and end types">
+      <p align="center"><em>Restriction map — type-II enzymes, cut sites and end types</em></p>
+    </td>
+  </tr>
+</table>
+
 ## Installation
 
 Requires a [Rust toolchain](https://rustup.rs/) (edition 2021).
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/Huseynteymurzade28/fasta-tui.git
 cd fasta-tui
 cargo build --release
 # the binary lands at target/release/fasta-tui
@@ -287,4 +303,4 @@ animation each tick, so the visualization keeps spinning even while idle.
 
 ## License
 
-See the repository for license details.
+Released under the [MIT License](LICENSE).
