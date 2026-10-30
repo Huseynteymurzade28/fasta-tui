@@ -1,6 +1,6 @@
 //! Keyboard handling: maps key events onto [`App`] mutations.
 
-use crossterm::event::{KeyCode, KeyEvent, KeyEventKind};
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use super::{clipboard, App, View};
 
@@ -17,12 +17,31 @@ impl App {
             self.handle_search_key(key.code);
             return;
         }
+        if self.palette.open {
+            self.handle_palette_key(key);
+            return;
+        }
+        // Any key dismisses the help overlay.
+        if self.show_help {
+            self.show_help = false;
+            return;
+        }
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        if ctrl && matches!(key.code, KeyCode::Char('p') | KeyCode::Char('k')) {
+            self.open_palette();
+            return;
+        }
+        if ctrl && key.code == KeyCode::Char('c') {
+            self.should_quit = true;
+            return;
+        }
 
         // The list views bind the arrow keys to their own row selection, so
         // give them first refusal on the key.
         let consumed = match self.view {
             View::Orf => self.handle_orf_key(key.code),
             View::Enzymes => self.handle_enzyme_key(key.code),
+            View::Protein => self.handle_protein_key(key.code),
             _ => false,
         };
         if consumed {
@@ -76,8 +95,13 @@ impl App {
             KeyCode::Char('f') => self.cycle_frame(),
             KeyCode::Char('t') => self.cycle_theme(),
 
-            // Help overlay.
+            // Reader tracks.
+            KeyCode::Char('c') => self.toggle_complement(),
+            KeyCode::Char('a') => self.toggle_translation(),
+
+            // Help overlay and command palette.
             KeyCode::Char('?') => self.toggle_help(),
+            KeyCode::Char(':') => self.open_palette(),
 
             _ => {}
         }
@@ -93,6 +117,40 @@ impl App {
             self.cancel_search();
         } else {
             self.should_quit = true;
+        }
+    }
+
+    /// Protein view keys: the arrows walk residues rather than bases.
+    fn handle_protein_key(&mut self, code: KeyCode) -> bool {
+        let row = self.metrics.get().residues_per_row.max(1) as isize;
+        match code {
+            KeyCode::Down | KeyCode::Char('j') => self.move_residues(row),
+            KeyCode::Up | KeyCode::Char('k') => self.move_residues(-row),
+            KeyCode::Right | KeyCode::Char('l') => self.move_residues(1),
+            KeyCode::Left | KeyCode::Char('h') => self.move_residues(-1),
+            _ => return false,
+        }
+        true
+    }
+
+    fn handle_palette_key(&mut self, key: KeyEvent) {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        match key.code {
+            KeyCode::Esc => self.close_palette(),
+            KeyCode::Enter => self.palette_run(),
+            KeyCode::Down | KeyCode::Tab => self.palette_move(1),
+            KeyCode::Up | KeyCode::BackTab => self.palette_move(-1),
+            KeyCode::Char('n') if ctrl => self.palette_move(1),
+            KeyCode::Char('p') if ctrl => self.palette_move(-1),
+            KeyCode::Backspace => {
+                self.palette.query.pop();
+                self.palette.selected = 0;
+            }
+            KeyCode::Char(c) if !ctrl => {
+                self.palette.query.push(c);
+                self.palette.selected = 0;
+            }
+            _ => {}
         }
     }
 
@@ -117,6 +175,7 @@ impl App {
             KeyCode::Up | KeyCode::Char('k') => self.enzyme_prev(),
             KeyCode::Enter => self.enzyme_search(),
             KeyCode::Char('u') => self.toggle_hide_noncutters(),
+            KeyCode::Char('x') => self.toggle_enzyme_mark(),
             _ => return false,
         }
         true
@@ -133,9 +192,9 @@ impl App {
     }
 
     /// Copy the selected bases to the clipboard as a FASTA record.
-    fn copy_selection(&mut self) {
+    pub fn copy_selection(&mut self) {
         let Some(bases) = self.selected_bases() else {
-            self.flash("nothing selected — press v first");
+            self.flash_warn("nothing selected — press v first");
             return;
         };
         let (lo, hi) = self.selection.range(self.cursor).expect("selection active");
@@ -154,7 +213,7 @@ impl App {
     /// Copy the selected ORF's protein to the clipboard as a FASTA record.
     fn copy_orf(&mut self) {
         let Some(orf) = self.orf.selected_orf().copied() else {
-            self.flash("no ORF selected");
+            self.flash_warn("no ORF selected");
             return;
         };
         let protein = orf.protein(&self.record().bases);
@@ -181,8 +240,8 @@ impl App {
             text.push('\n');
         }
         match clipboard::copy(&text) {
-            Ok(()) => self.flash(ok_msg),
-            Err(e) => self.flash(format!("clipboard failed: {e}")),
+            Ok(()) => self.flash_ok(ok_msg),
+            Err(e) => self.flash_warn(format!("clipboard failed: {e}")),
         }
     }
 }

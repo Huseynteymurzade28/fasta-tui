@@ -1,6 +1,7 @@
 //! FASTA domain layer: parsing, the record model, statistics, translation,
 //! ORF detection, restriction mapping and oligo thermodynamics.
 
+pub mod aa;
 pub mod enzymes;
 pub mod iupac;
 pub mod oligo;

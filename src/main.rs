@@ -15,9 +15,10 @@ mod ui;
 
 use std::io::{self, Write};
 use std::path::Path;
-use std::time::Duration;
+use std::time::Instant;
 
-use crossterm::event::{self, Event};
+use crossterm::event::{self, DisableMouseCapture, EnableMouseCapture, Event};
+use crossterm::execute;
 
 use app::App;
 use cli::Cli;
@@ -41,7 +42,9 @@ fn main() -> io::Result<()> {
 
     let mut app = App::new(records);
     let mut terminal = ratatui::init();
+    execute!(io::stdout(), EnableMouseCapture)?;
     let result = run(&mut terminal, &mut app);
+    let _ = execute!(io::stdout(), DisableMouseCapture);
     ratatui::restore();
     result
 }
@@ -154,18 +157,30 @@ fn print_restriction_map(records: &[Record]) -> io::Result<()> {
     Ok(())
 }
 
-/// The main event loop. Polls with a timeout so the helix keeps spinning even
-/// when the user is idle.
+/// The main event loop. Animation advances on a fixed clock independent of
+/// input, so holding a key does not speed the helix up; events that arrive
+/// between ticks are handled and redrawn immediately.
 fn run(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> io::Result<()> {
+    let mut next_tick = Instant::now() + app::TICK;
     while !app.should_quit {
         terminal.draw(|frame| ui::draw(frame, app))?;
 
-        if event::poll(Duration::from_millis(80))? {
-            if let Event::Key(key) = event::read()? {
-                app.handle_key(key);
+        let timeout = next_tick.saturating_duration_since(Instant::now());
+        if event::poll(timeout)? {
+            match event::read()? {
+                Event::Key(key) => app.handle_key(key),
+                Event::Mouse(mouse) => app.handle_mouse(mouse),
+                _ => {}
             }
         }
-        app.on_tick();
+        if Instant::now() >= next_tick {
+            app.on_tick();
+            next_tick += app::TICK;
+            // After a stall (suspended terminal), resync instead of racing.
+            if next_tick < Instant::now() {
+                next_tick = Instant::now() + app::TICK;
+            }
+        }
     }
     Ok(())
 }

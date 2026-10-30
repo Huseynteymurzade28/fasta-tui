@@ -1,147 +1,390 @@
-//! Left/right split of the Reader view: GC gauge + sequence text + helix.
+//! The Reader view: genome overview, a double-stranded sequence browser with
+//! a translation track, and the helix alongside.
 
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Margin, Rect},
-    style::{Modifier, Style},
+    layout::{Constraint, Layout, Margin, Rect},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{
-        Block, BorderType, Gauge, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
-    },
+    widgets::{Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
     Frame,
 };
 
-use super::helix;
-use crate::app::{App, ReaderMetrics};
-use crate::fasta::stats;
+use super::{fx, glow, helix, hints, overview, panel, thousands};
+use crate::app::{clamp_scroll, App, ReaderHit, ReaderMetrics};
+use crate::fasta::aa::AaClass;
+use crate::fasta::Record;
 use crate::theme::Palette;
 
 /// Bases grouped together with a blank between groups, like a genome browser.
 const GROUP: usize = 10;
-/// Width of the left position gutter: `"%6d "` number + `"│ "` separator.
-const GUTTER: usize = 9;
 
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
-    let cols = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
-        .split(area);
+    // Narrow terminals give the whole width to the sequence.
+    let helix_w = if area.width >= 110 { area.width * 36 / 100 } else { 0 };
+    let [left, right] =
+        Layout::horizontal([Constraint::Min(0), Constraint::Length(helix_w)]).areas(area);
 
-    render_left(frame, cols[0], app);
-    helix::render(frame, cols[1], app);
+    let sel_height = if app.selection.active { 3 } else { 0 };
+    let [over, seq, sel] = Layout::vertical([
+        Constraint::Length(5),
+        Constraint::Min(0),
+        Constraint::Length(sel_height),
+    ])
+    .areas(left);
+
+    overview::render(frame, over, app);
+    render_sequence(frame, seq, app);
+    if app.selection.active {
+        render_selection_panel(frame, sel, app);
+    }
+    if helix_w > 0 {
+        helix::render(frame, right, app);
+    }
 }
 
-fn render_left(frame: &mut Frame, area: Rect, app: &App) {
-    let palette = app.theme.palette();
-    // The selection panel only claims height while a selection exists.
-    let sel_height = if app.selection.active { 3 } else { 0 };
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(3),
-            Constraint::Min(0),
-            Constraint::Length(sel_height),
-        ])
-        .split(area);
+/// Which extra lines accompany each sequence row.
+struct Tracks {
+    complement: bool,
+    translation: bool,
+}
 
-    // --- GC content gauge ---------------------------------------------------
-    let gc = stats::gc_content(&app.record().bases);
-    let desc = &app.record().description;
-    let gauge_title = if desc.is_empty() {
-        " GC Content ".to_string()
-    } else {
-        format!(" GC Content — {desc} ")
+impl Tracks {
+    fn lines_per_row(&self) -> usize {
+        let extra = self.complement as usize + self.translation as usize;
+        // A blank spacer keeps multi-line rows from running together.
+        if extra > 0 { 2 + extra } else { 1 }
+    }
+}
+
+fn render_sequence(frame: &mut Frame, area: Rect, app: &App) {
+    let p = app.theme.palette();
+    let seq = &app.record().bases;
+    let len = seq.len();
+    let tracks = Tracks {
+        complement: app.show_complement,
+        translation: app.show_translation,
     };
-    let gauge = Gauge::default()
-        .block(
-            Block::bordered()
-                .border_type(BorderType::Rounded)
-                .title(gauge_title),
+
+    let frame_label = format!(
+        "{} strand · frame {}",
+        if app.reverse { "−" } else { "+" },
+        app.frame + 1
+    );
+    let block = panel("≋", "Sequence", &p)
+        .title(
+            Line::from(Span::styled(format!(" {frame_label} "), Style::default().fg(p.muted)))
+                .right_aligned(),
         )
-        .gauge_style(Style::default().fg(palette.accent))
-        .ratio(gc)
-        .label(format!("{:.1}%  ({} bases)", gc * 100.0, app.record_len()));
-    frame.render_widget(gauge, rows[0]);
+        .title_bottom(hints(
+            &[("c", "complement"), ("a", "translation"), ("f", "frame"), ("r", "strand")],
+            &p,
+        ));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    glow(frame, area, app);
 
-    // --- Sequence reader ----------------------------------------------------
-    // Size each row to the available width so it never wraps (wrapping would
-    // throw off the row-based scroll below). We pack as many 10-base groups as
-    // fit: a row of `g` groups is `GUTTER + 11*g - 1` columns wide. One inner
-    // column is reserved on the right for the scrollbar.
-    let inner_w = (rows[1].width.saturating_sub(2) as usize).saturating_sub(1);
-    let groups = inner_w.saturating_sub(GUTTER - 1) / (GROUP + 1);
-    let bases_per_row = groups.max(1) * GROUP;
-    let visible_rows = rows[1].height.saturating_sub(2) as usize; // minus borders
-
-    // Publish the measured geometry so navigation keys can move by row / page.
-    app.metrics.set(ReaderMetrics {
-        bases_per_row,
-        visible_rows,
-    });
-
-    let lines = build_reader_lines(app, &palette, bases_per_row);
-    let total_rows = lines.len();
-    let title = " Sequence  (A·T·G·C colored, ATG=start, TAA/TAG/TGA=stop, motif=highlight) ";
-    let reader = Paragraph::new(lines)
-        .block(
-            Block::bordered()
-                .border_type(BorderType::Rounded)
-                .title(title)
-                .border_style(Style::default().fg(palette.rung)),
-        )
-        .scroll((app.scroll_top as u16, 0));
-    frame.render_widget(reader, rows[1]);
-
-    // Scrollbar tracking the cursor's position through the whole record.
-    if total_rows > visible_rows {
-        let mut sb_state = ScrollbarState::new(total_rows)
-            .viewport_content_length(visible_rows)
-            .position(app.scroll_top);
-        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
-            .begin_symbol(Some("▲"))
-            .end_symbol(Some("▼"))
-            .thumb_style(Style::default().fg(palette.accent))
-            .track_style(Style::default().fg(palette.rung_back));
-        frame.render_stateful_widget(
-            scrollbar,
-            rows[1].inner(Margin {
-                vertical: 1,
-                horizontal: 0,
-            }),
-            &mut sb_state,
-        );
+    if len == 0 || inner.height < 2 {
+        frame.render_widget(Paragraph::new("<empty sequence>"), inner);
+        return;
     }
 
-    if app.selection.active {
-        render_selection_panel(frame, rows[2], app);
+    // Size each row to the width: a gutter, then as many 10-base groups as
+    // fit (each group plus its trailing blank is 11 columns). One column is
+    // left free on the right for breathing room next to the scrollbar.
+    let digits = len.to_string().len().max(4);
+    let gutter = digits + 3;
+    let usable = (inner.width as usize).saturating_sub(gutter + 1);
+    let groups = ((usable + 1) / (GROUP + 1)).max(1);
+    let bases_per_row = groups * GROUP;
+
+    let lpr = tracks.lines_per_row();
+    let body = Rect { y: inner.y + 1, height: inner.height - 1, ..inner };
+    // The last row may lose its blank spacer line, nothing more.
+    let h = body.height as usize;
+    let visible_rows = if lpr > 1 { (h + 1) / lpr } else { h }.max(1);
+
+    let prev = app.metrics.get();
+    app.metrics.set(ReaderMetrics { bases_per_row, visible_rows, ..prev });
+
+    let total_rows = len.div_ceil(bases_per_row);
+    let cursor_row = app.cursor / bases_per_row;
+    let top = clamp_scroll(app.scroll_top.get(), cursor_row, visible_rows)
+        .min(total_rows.saturating_sub(1));
+    app.scroll_top.set(top);
+
+    app.hits.borrow_mut().reader = Some(ReaderHit {
+        rows: body,
+        lines_per_row: lpr,
+        bases_per_row,
+        scroll_top: top,
+        gutter: gutter as u16,
+    });
+
+    let mut lines = vec![ruler(app, &p, digits, bases_per_row)];
+    let styles = BaseStyler::new(app, &p);
+    for row in top..(top + visible_rows).min(total_rows) {
+        let start = row * bases_per_row;
+        let end = (start + bases_per_row).min(len);
+        let is_cursor_row = row == cursor_row;
+        let row_bg = if is_cursor_row { Some(p.surface) } else { None };
+
+        // Forward strand.
+        let mut spans = vec![
+            Span::styled(
+                format!("{:>digits$} ", start + 1),
+                Style::default().fg(if is_cursor_row { p.accent } else { p.muted }),
+            ),
+            Span::styled("│ ", Style::default().fg(p.border)),
+        ];
+        for k in start..end {
+            if k > start && (k - start) % GROUP == 0 {
+                spans.push(Span::raw(" "));
+            }
+            spans.push(Span::styled((seq[k] as char).to_string(), styles.forward(k)));
+        }
+        lines.push(with_bg(Line::from(spans), row_bg));
+
+        if tracks.complement {
+            let mut spans = vec![
+                Span::styled(format!("{:>digits$} ", ""), Style::default()),
+                Span::styled("┊ ", Style::default().fg(p.border)),
+            ];
+            for k in start..end {
+                if k > start && (k - start) % GROUP == 0 {
+                    spans.push(Span::raw(" "));
+                }
+                let comp = Record::complement(seq[k]) as char;
+                spans.push(Span::styled(comp.to_string(), styles.complement(k, comp)));
+            }
+            lines.push(with_bg(Line::from(spans), row_bg));
+        }
+
+        if tracks.translation {
+            let mut spans = vec![
+                Span::styled(format!("{:>digits$} ", ""), Style::default()),
+                Span::styled("┊ ", Style::default().fg(p.border)),
+            ];
+            for k in start..end {
+                if k > start && (k - start) % GROUP == 0 {
+                    spans.push(Span::raw(" "));
+                }
+                spans.push(styles.translation(k));
+            }
+            lines.push(with_bg(Line::from(spans), row_bg));
+        }
+
+        if lpr > 1 {
+            lines.push(Line::from(""));
+        }
+    }
+
+    frame.render_widget(Paragraph::new(lines), inner);
+
+    // A slim scrollbar riding on the right border.
+    if total_rows > visible_rows {
+        let mut state = ScrollbarState::new(total_rows.saturating_sub(visible_rows))
+            .viewport_content_length(visible_rows)
+            .position(top);
+        let bar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .begin_symbol(None)
+            .end_symbol(None)
+            .track_symbol(Some("│"))
+            .thumb_symbol("┃")
+            .track_style(Style::default().fg(p.border))
+            .thumb_style(Style::default().fg(p.accent));
+        frame.render_stateful_widget(bar, area.inner(Margin { vertical: 1, horizontal: 0 }), &mut state);
+    }
+}
+
+/// Paint a whole line's background (for the cursor-row band).
+fn with_bg(line: Line<'static>, bg: Option<Color>) -> Line<'static> {
+    match bg {
+        Some(bg) => {
+            let spans = line
+                .spans
+                .into_iter()
+                .map(|s| {
+                    // Leave already-colored cells (matches, codons) alone.
+                    if s.style.bg.is_none() {
+                        let style = s.style.bg(bg);
+                        Span::styled(s.content, style)
+                    } else {
+                        s
+                    }
+                })
+                .collect::<Vec<_>>();
+            Line::from(spans)
+        }
+        None => line,
+    }
+}
+
+/// Column ruler above the rows: a tick and offset at each group start, and
+/// the cursor's column marked.
+fn ruler(app: &App, p: &Palette, digits: usize, bases_per_row: usize) -> Line<'static> {
+    let col = |k: usize| k + k / GROUP; // display column of the k-th base
+    let width = col(bases_per_row - 1) + 1;
+    let muted = Style::default().fg(p.muted);
+    let mut cells: Vec<(char, Style)> = vec![(' ', Style::default()); width];
+
+    for g in (0..bases_per_row).step_by(GROUP) {
+        cells[col(g)] = ('╹', muted);
+        if g + 4 < bases_per_row {
+            cells[col(g + 4)] = ('·', Style::default().fg(p.border));
+        }
+        for (i, ch) in (g + 1).to_string().chars().enumerate() {
+            let k = g + 1 + i;
+            if k < bases_per_row && k < g + GROUP {
+                cells[col(k)] = (ch, muted);
+            }
+        }
+    }
+    let cursor = app.cursor % bases_per_row;
+    cells[col(cursor)] = ('▼', Style::default().fg(p.accent).add_modifier(Modifier::BOLD));
+
+    let mut spans = vec![Span::raw(format!("{:>digits$}   ", ""))];
+    spans.extend(cells.into_iter().map(|(ch, st)| Span::styled(ch.to_string(), st)));
+    Line::from(spans)
+}
+
+/// Resolves the style of each base from the layers that can apply to it:
+/// nucleotide color, in-frame start/stop codons, motif hits, the selection
+/// and the cursor.
+struct BaseStyler<'a> {
+    app: &'a App,
+    p: &'a Palette,
+    selection: Option<(usize, usize)>,
+    cursor_codon: Option<usize>,
+}
+
+impl<'a> BaseStyler<'a> {
+    fn new(app: &'a App, p: &'a Palette) -> Self {
+        BaseStyler {
+            app,
+            p,
+            selection: app.selection.range(app.cursor),
+            cursor_codon: app.codon_at(app.cursor).map(|(s, _)| s),
+        }
+    }
+
+    fn in_selection(&self, k: usize) -> bool {
+        self.selection.is_some_and(|(lo, hi)| k >= lo && k < hi)
+    }
+
+    fn motif(&self, k: usize) -> Option<(bool, bool)> {
+        // Matches are sorted by start; binary search the candidates.
+        let m = &self.app.search.matches;
+        if m.is_empty() {
+            return None;
+        }
+        let idx = m.partition_point(|x| x.start <= k);
+        let active = self.app.search.active_match();
+        m[..idx]
+            .iter()
+            .rev()
+            .take(16)
+            .find(|x| k < x.end())
+            .map(|x| (x.revcomp, Some(*x) == active))
+    }
+
+    fn forward(&self, k: usize) -> Style {
+        let p = self.p;
+        let base = self.app.record().bases[k] as char;
+        let mut style = Style::default().fg(p.base_color(base));
+
+        // In-frame start and stop codons get a soft tinted background.
+        if let Some((_, aa)) = self.app.codon_at(k) {
+            match aa {
+                'M' => style = style.bg(fx::lerp(p.bg, p.start_bg, 0.55)).add_modifier(Modifier::BOLD),
+                '*' => style = style.bg(fx::lerp(p.bg, p.stop_bg, 0.6)).add_modifier(Modifier::BOLD),
+                _ => {}
+            }
+        }
+        if self.in_selection(k) {
+            style = style.bg(fx::lerp(p.bg, p.match_bg, 0.3));
+        }
+        if let Some((revcomp, active)) = self.motif(k) {
+            let bg = if active { p.accent } else { p.match_bg };
+            style = Style::default().fg(fx::contrast_text(bg)).bg(bg).add_modifier(Modifier::BOLD);
+            if revcomp {
+                style = style.add_modifier(Modifier::UNDERLINED);
+            }
+        }
+        if k == self.app.cursor {
+            // A gently breathing cursor is easy to find without being loud.
+            let bg = fx::lerp(p.accent, p.text, 0.35 * fx::pulse(self.app.tick, 30));
+            style = Style::default().fg(fx::contrast_text(bg)).bg(bg).add_modifier(Modifier::BOLD);
+        }
+        style
+    }
+
+    fn complement(&self, k: usize, comp: char) -> Style {
+        let p = self.p;
+        let mut style = Style::default().fg(fx::lerp(p.base_color(comp), p.bg, 0.45));
+        if self.in_selection(k) {
+            style = style.bg(fx::lerp(p.bg, p.match_bg, 0.18));
+        }
+        if k == self.app.cursor {
+            style = style.fg(p.accent).add_modifier(Modifier::BOLD | Modifier::UNDERLINED);
+        }
+        style
+    }
+
+    /// The translation track: each residue sits under its codon's middle
+    /// base, and alternate codons are shaded so frame boundaries show.
+    fn translation(&self, k: usize) -> Span<'static> {
+        let p = self.p;
+        let Some((start, aa)) = self.app.codon_at(k) else {
+            return Span::raw(" ");
+        };
+        let shade = if (start / 3) % 2 == 0 { Some(p.surface) } else { None };
+        let mut style = Style::default();
+        if let Some(bg) = shade {
+            style = style.bg(bg);
+        }
+        if Some(start) == self.cursor_codon {
+            style = style.bg(p.surface_hi);
+        }
+        if k != start + 1 {
+            return Span::styled(" ", style);
+        }
+        let class = AaClass::of(aa);
+        style = match aa {
+            'M' => style.fg(fx::contrast_text(p.start_bg)).bg(p.start_bg).add_modifier(Modifier::BOLD),
+            '*' => style.fg(fx::contrast_text(p.stop_bg)).bg(p.stop_bg).add_modifier(Modifier::BOLD),
+            _ => style.fg(p.aa_color(class)),
+        };
+        Span::styled(aa.to_string(), style)
     }
 }
 
 /// The oligo panel under the reader: length, composition and melting
 /// temperature for whatever the user has selected.
 fn render_selection_panel(frame: &mut Frame, area: Rect, app: &App) {
-    let palette = app.theme.palette();
+    let p = app.theme.palette();
     let Some((lo, hi)) = app.selection.range(app.cursor) else {
         return;
     };
     let hi = hi.min(app.record_len());
 
-    let title = format!(
-        " Selection — {}..{} on the {} strand  [y: copy  Esc: clear] ",
-        lo + 1,
-        hi,
-        if app.reverse { "reverse" } else { "forward" }
-    );
+    let block = panel(
+        "▭",
+        format!(
+            "Selection {}..{} · {} strand",
+            thousands(lo + 1),
+            thousands(hi),
+            if app.reverse { "reverse" } else { "forward" }
+        ),
+        &p,
+    )
+    .border_style(Style::default().fg(p.match_bg))
+    .title(hints(&[("y", "copy FASTA"), ("Esc", "clear")], &p).right_aligned());
 
     let line = match app.selection_stats() {
         Some(s) => {
-            let key = |t: &str| {
-                Span::styled(
-                    format!(" {t} "),
-                    Style::default().fg(palette.accent).add_modifier(Modifier::DIM),
-                )
-            };
+            let key = |t: &str| Span::styled(format!(" {t} "), Style::default().fg(p.muted));
             let val = |t: String| {
-                Span::styled(t, Style::default().fg(palette.text).add_modifier(Modifier::BOLD))
+                Span::styled(t, Style::default().fg(p.text).add_modifier(Modifier::BOLD))
             };
             // The nearest-neighbour Tm is the one to trust; Wallace is shown as
             // a sanity check and is all we have for ambiguous sequence.
@@ -149,137 +392,23 @@ fn render_selection_panel(frame: &mut Frame, area: Rect, app: &App) {
                 Some(tm) => format!("{tm:.1} °C (NN)"),
                 None => format!("{:.1} °C (Wallace)", s.tm_wallace),
             };
-            let mut spans = vec![
-                key("len"),
-                val(format!("{} nt", s.len)),
-                key("  GC"),
-                val(format!("{:.1}%", s.gc * 100.0)),
+            let mut spans = vec![key("len"), val(format!("{} nt", s.len)), key("  GC")];
+            spans.extend(fx::hbar(6, s.gc, p.base_a, p.base_g, Some(p.surface)));
+            spans.push(val(format!(" {:.1}%", s.gc * 100.0)));
+            spans.extend([
                 key("  Tm"),
                 val(tm),
                 key("  MW"),
                 val(format!("{:.1} kDa", s.mw / 1000.0)),
-            ];
+            ]);
             if s.ambiguous > 0 {
                 spans.push(key("  ambiguous"));
                 spans.push(val(format!("{}", s.ambiguous)));
             }
             Line::from(spans)
         }
-        None => Line::from(Span::styled(
-            " empty selection",
-            Style::default().fg(palette.text),
-        )),
+        None => Line::from(Span::styled(" empty selection", Style::default().fg(p.muted))),
     };
 
-    let panel = Paragraph::new(line).block(
-        Block::bordered()
-            .border_type(BorderType::Rounded)
-            .title(title)
-            .border_style(Style::default().fg(palette.match_bg)),
-    );
-    frame.render_widget(panel, area);
-}
-
-/// Build codon- and motif-highlighted rows for the current record.
-fn build_reader_lines(app: &App, palette: &Palette, bases_per_row: usize) -> Vec<Line<'static>> {
-    use ratatui::style::Color;
-
-    let seq = &app.record().bases;
-    if seq.is_empty() {
-        return vec![Line::from("<empty sequence>")];
-    }
-
-    // 1. Start every base from its nucleotide color so A/T/G/C read apart at a
-    //    glance (the same palette the helix uses). Highlights layer on top.
-    let mut styles: Vec<Style> = seq
-        .iter()
-        .map(|&b| Style::default().fg(palette.base_color(b as char)))
-        .collect();
-
-    // 2. Codon highlighting via a non-overlapping left-to-right scan.
-    let mut i = 0;
-    while i + 3 <= seq.len() {
-        match &seq[i..i + 3] {
-            b"ATG" => {
-                styles[i..i + 3].fill(
-                    Style::default()
-                        .bg(palette.start_bg)
-                        .fg(Color::Black)
-                        .add_modifier(Modifier::BOLD),
-                );
-                i += 3;
-            }
-            b"TAA" | b"TAG" | b"TGA" => {
-                styles[i..i + 3].fill(
-                    Style::default()
-                        .bg(palette.stop_bg)
-                        .fg(Color::White)
-                        .add_modifier(Modifier::BOLD),
-                );
-                i += 3;
-            }
-            _ => i += 1,
-        }
-    }
-
-    // 3. Motif matches override codon backgrounds. Minus-strand hits are
-    //    underlined so they read apart from plus-strand ones.
-    let active = app.search.active_match();
-    for m in &app.search.matches {
-        let end = m.end().min(seq.len());
-        let mut style = Style::default()
-            .bg(palette.match_bg)
-            .fg(Color::Black)
-            .add_modifier(Modifier::BOLD);
-        if m.revcomp {
-            style = style.add_modifier(Modifier::UNDERLINED);
-        }
-        // The hit n/N is currently sitting on gets the accent background.
-        if Some(*m) == active {
-            style = style.bg(palette.accent);
-        }
-        styles[m.start..end].fill(style);
-    }
-
-    // 4. The selection dims everything it does not cover, so the picked range
-    //    stands out without repainting it.
-    if let Some((lo, hi)) = app.selection.range(app.cursor) {
-        let hi = hi.min(seq.len());
-        for (i, style) in styles.iter_mut().enumerate() {
-            if i < lo || i >= hi {
-                *style = style.add_modifier(Modifier::DIM);
-            } else {
-                *style = style.add_modifier(Modifier::UNDERLINED);
-            }
-        }
-    }
-
-    // 5. Cursor marker.
-    if app.cursor < seq.len() {
-        styles[app.cursor] = styles[app.cursor].add_modifier(Modifier::REVERSED);
-    }
-
-    // 6. Emit fixed-width rows: a position gutter, then 10-base groups split by
-    //    a thin space so the eye can count along the strand.
-    let gutter_style = Style::default().fg(palette.accent).add_modifier(Modifier::DIM);
-    let sep_style = Style::default().fg(palette.rung);
-
-    let mut lines = Vec::with_capacity(seq.len() / bases_per_row + 1);
-    for start in (0..seq.len()).step_by(bases_per_row) {
-        let end = (start + bases_per_row).min(seq.len());
-        let mut spans = Vec::with_capacity(bases_per_row + bases_per_row / GROUP + 2);
-
-        // Left gutter: 1-based position of the row's first base.
-        spans.push(Span::styled(format!("{:>6} ", start + 1), gutter_style));
-        spans.push(Span::styled("│ ", sep_style));
-
-        for k in start..end {
-            if k > start && (k - start) % GROUP == 0 {
-                spans.push(Span::raw(" "));
-            }
-            spans.push(Span::styled((seq[k] as char).to_string(), styles[k]));
-        }
-        lines.push(Line::from(spans));
-    }
-    lines
+    frame.render_widget(Paragraph::new(line).block(block), area);
 }

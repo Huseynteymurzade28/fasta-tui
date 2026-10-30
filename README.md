@@ -16,28 +16,44 @@ all inside your terminal.
 
 ## Features
 
-- **Sequence reader** — a genome-browser-style view with a position gutter,
-  10-base groups, and per-nucleotide coloring (A/T/G/C each get their own hue).
-  Start codons (`ATG`) and stop codons (`TAA`/`TAG`/`TGA`) are highlighted in a
-  non-overlapping left-to-right scan, and the base under the cursor is marked.
-- **3D double helix** — a Braille-rendered, rotating double helix on the right
-  pane. Front strands are drawn bright over dimmed back strands for a sense of
-  depth, with the actual base letters floating on the rungs. It spins on idle and
-  rotates as you scroll; speed and twist are adjustable.
-- **Stats view** — a base-composition bar chart and a GC-content sliding-window
-  line chart (computed with prefix sums for O(1) window queries).
-- **Protein view** — live translation of the selected strand and reading frame
-  using the standard genetic code, with start (`M`) and stop (`*`) residues
-  highlighted.
-- **ORF finder** — a six-frame open reading frame table, sorted longest first,
-  with the encoded protein beside it. `Enter` drops you at that ORF in the
+- **Sequence reader** — a genome-browser-style, double-stranded view: each row
+  shows the forward strand, its complement (`c`) and the amino-acid
+  translation of the active frame (`a`), with codon boundaries shaded. Start
+  and stop codons are highlighted *in frame*, a column ruler tracks the cursor,
+  and the cursor row is banded.
+- **Genome overview** — the whole record squeezed into three tracks above the
+  reader: a GC heatmap at double horizontal resolution, ORFs on both strands,
+  and the viewport, selection and motif hits. Click or drag it to scrub.
+- **3D double helix** — a Braille-rendered, rotating double helix with
+  continuous depth shading, a thicker front backbone, and rungs split into
+  their two bases' colors. It spins on idle and rotates as you scroll; speed
+  and twist are adjustable.
+- **Stats view** — base composition with smooth sub-cell bars, a dinucleotide
+  observed/expected heatmap (CpG depletion jumps out), GC content and GC skew
+  along the record with the cursor marked, and a textbook-layout codon usage
+  table shaded by frequency for the active strand and frame.
+- **Protein view** — live translation colored by physicochemical class, a
+  Kyte–Doolittle hydropathy profile above it, and the cursor linked to the
+  reader so the arrows walk residue by residue.
+- **ORF finder** — a six-frame ORF table with inline length bars, a six-frame
+  map of every ORF along the record, and the selected ORF's span, mass, GRAVY
+  score, class composition and protein. `Enter` drops you at that ORF in the
   reader with its strand and frame already dialled in.
 - **Motif search** — incremental motif search accepting the full IUPAC alphabet
   (`N`, `R`, `Y`, `W`, …), optionally matching the reverse complement too, with
   match highlighting and jump-to-next/previous navigation.
 - **Restriction map** — 31 common type-II enzymes digested against the current
-  record: site counts, cut positions, linear fragment sizes, blunt/sticky ends,
-  and unique cutters flagged for cloning. `Enter` searches a site in the reader.
+  record, each row with an inline cut map: site counts, cut positions, linear
+  fragment sizes, blunt/sticky ends, and unique cutters flagged for cloning.
+  `Enter` searches a site in the reader.
+- **Virtual gel** — the selected digest run on an animated agarose gel beside a
+  size ladder, bands placed on a log scale and brightened by mass. Mark enzymes
+  with `x` to add a combined multi-enzyme digest lane.
+- **Command palette** — `:` or `Ctrl-P` opens a fuzzy-filtered list of every
+  action. Type a number (`1,234`, `12.5k`) to jump there, or a DNA motif to
+  search it.
+- **Mouse support** — click tabs, bases, table rows and ORFs on the six-frame
+  map; drag in the reader to select; scroll anywhere.
 - **Selection & primer stats** — mark a range with `v`, and the reader reports
   its length, GC content, nearest-neighbour melting temperature (SantaLucia
   1998, salt-corrected) and molecular weight. `y` copies it as FASTA to the
@@ -49,7 +65,9 @@ all inside your terminal.
   standard input (`-`), with RNA (`U`) and IUPAC ambiguity codes accepted.
 - **Protein export** — `--export-protein` translates every record to a protein
   FASTA file (or stdout) headlessly, for use in scripts and pipelines.
-- **Themes** — three built-in color palettes (Neon, Pale, High-Contrast).
+- **Themes** — four truecolor palettes (Neon, Aurora, Pale, High-Contrast),
+  with animated gradient borders, view fade-ins and slide-in notifications.
+  A truecolor terminal is recommended.
 
 ## Screenshots
 
@@ -182,6 +200,7 @@ Press `?` at any time to toggle the in-app key reference.
 | `1` … `5` | Switch view: Reader / Stats / Protein / ORFs / Enzymes |
 | `r` | Toggle reverse-complement strand |
 | `f` | Cycle reading frame 0 / 1 / 2 |
+| `c` / `a` | Toggle the complement / translation tracks in the reader |
 | `t` | Cycle color theme |
 
 ### Search
@@ -199,8 +218,9 @@ Press `?` at any time to toggle the in-app key reference.
 | `v` | Start a selection at the cursor, or drop the current one |
 | `y` | Copy the selection (or, in the ORF view, its protein) to the clipboard |
 
-Everything outside the selection dims, and a panel under the reader shows the
-length, GC content, melting temperature and molecular weight of what you picked.
+Dragging with the mouse selects too. The selected range is tinted, and a panel
+under the reader shows the length, GC content, melting temperature and
+molecular weight of what you picked.
 
 ### ORF table (view `4`)
 
@@ -217,6 +237,7 @@ length, GC content, melting temperature and molecular weight of what you picked.
 | --- | --- |
 | `↑` / `↓` | Select an enzyme |
 | `Enter` | Search its recognition site in the reader |
+| `x` | Add / remove the enzyme from the combined digest on the gel |
 | `u` | Show only the enzymes that actually cut |
 
 ### Helix controls
@@ -231,34 +252,32 @@ length, GC content, melting temperature and molecular weight of what you picked.
 
 | Key | Action |
 | --- | --- |
+| `:` / `Ctrl-P` | Open the command palette |
 | `?` | Toggle the help overlay |
 | `Esc` | Close the help, else drop the selection, else clear the search, else quit |
 | `q` | Quit |
 
 ## Status bar
 
-The bottom line summarizes the current state as color-coded chips:
-
-- `FWD` / `REV` — current strand orientation.
-- `base X @ pos/len` — the nucleotide under the cursor and its 1-based position.
-- `F+n` — the active reading frame.
-- theme name and `SPIN` / `PAUSED` for the helix.
-- `SEL a..b (n nt)` — the active selection.
-- `/motif±  i/total` — appears while a search has matches; `±` means both
-  strands are being matched.
-- Transient messages (copy confirmations, hit counts) briefly take the line over.
+The bottom line shows a mode chip (`NORMAL`, `SELECT`, `COMMAND`, `SEARCH`),
+the strand and frame, the cursor position with a progress bar through the
+record, the base under the cursor and the codon it belongs to (`ATG→M`), and
+chips for the active selection and search. The right side lists the keys that
+matter in the current view. Confirmations and errors appear as toasts in the
+bottom-right corner.
 
 ## Project layout
 
 ```
 src/
-├── main.rs            # entry point + event loop (polls input, ticks animation)
+├── main.rs            # entry point + event loop (fixed-rate animation clock, input)
 ├── cli.rs             # command-line argument parsing (clap)
 ├── theme.rs           # color palettes shared across widgets
 ├── fasta/             # domain layer (no UI dependencies)
 │   ├── parse.rs       # multi-record FASTA parser
 │   ├── record.rs      # Record model, complement / reverse-complement
-│   ├── stats.rs       # base counts, GC content, sliding-window GC
+│   ├── stats.rs       # composition, GC / skew windows, dinucleotides, codon usage
+│   ├── aa.rs          # amino-acid classes and Kyte–Doolittle hydropathy
 │   ├── translate.rs   # codon → amino-acid translation (standard code)
 │   ├── iupac.rs       # ambiguity-code aware pattern matching
 │   ├── orf.rs         # six-frame open reading frame detection
@@ -267,15 +286,21 @@ src/
 ├── app/               # application state + input handling
 │   ├── mod.rs         # App state, navigation, search, ORFs, selection
 │   ├── input.rs       # key-event → state mutation mapping
+│   ├── mouse.rs       # clicks, drags and the wheel, via the last frame's hit map
+│   ├── commands.rs    # command palette: actions, fuzzy matching
 │   └── clipboard.rs   # OSC 52 clipboard copy (no external dependency)
 └── ui/                # rendering layer (Ratatui)
-    ├── mod.rs         # top-level layout, tab bar, status line
-    ├── reader.rs      # sequence reader + GC gauge + scrollbar
+    ├── mod.rs         # top-level layout, header, status line, toasts, panels
+    ├── fx.rs          # truecolor effects: gradients, fades, sub-cell bars, heat ramps
+    ├── reader.rs      # double-stranded reader with translation track
+    ├── overview.rs    # whole-record GC / ORF / viewport tracks
     ├── helix.rs       # the 3D Braille double helix
-    ├── stats.rs       # composition + GC charts
+    ├── stats.rs       # composition, dinucleotide heatmap, GC charts, codon table
     ├── protein.rs     # amino-acid translation view
-    ├── orf.rs         # ORF table + encoded protein
+    ├── orf.rs         # ORF table, six-frame map, encoded protein
     ├── enzymes.rs     # restriction map + cut sites
+    ├── gel.rs         # animated virtual agarose gel
+    ├── command.rs     # command palette popup
     └── help.rs        # key-binding overlay
 ```
 

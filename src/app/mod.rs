@@ -1,13 +1,18 @@
 //! Central application state and the logic that mutates it.
 
 pub mod clipboard;
+pub mod commands;
 pub mod input;
+pub mod mouse;
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
+
+use ratatui::layout::Rect;
 
 use crate::fasta::enzymes::{self, Digest};
 use crate::fasta::orf::{self, Orf};
-use crate::fasta::{iupac, oligo, Record};
+use crate::fasta::{iupac, oligo, stats, Record};
 use crate::theme::Theme;
 
 /// Which main view is currently shown.
@@ -44,15 +49,17 @@ impl View {
         }
     }
 
-    pub fn index(self) -> usize {
+    /// A one-glyph icon shown beside the title in the tab bar.
+    pub fn icon(self) -> &'static str {
         match self {
-            View::Reader => 0,
-            View::Stats => 1,
-            View::Protein => 2,
-            View::Orf => 3,
-            View::Enzymes => 4,
+            View::Reader => "≋",
+            View::Stats => "▤",
+            View::Protein => "⬡",
+            View::Orf => "⇶",
+            View::Enzymes => "✂",
         }
     }
+
 }
 
 /// Animation parameters for the double helix.
@@ -153,6 +160,10 @@ pub struct EnzymeState {
     pub selected: usize,
     /// Hide enzymes that do not cut this record.
     pub hide_zero: bool,
+    /// Enzymes picked for a combined digest, by name.
+    pub marked: Vec<&'static str>,
+    /// Tick the shown digest last changed on; restarts the gel run.
+    pub changed_at: u64,
 }
 
 impl EnzymeState {
@@ -166,6 +177,19 @@ impl EnzymeState {
 
     pub fn selected_digest(&self) -> Option<&Digest> {
         self.visible().get(self.selected).copied()
+    }
+
+    /// Cut positions of every marked enzyme together, ascending.
+    pub fn combined_cuts(&self) -> Vec<usize> {
+        let mut cuts: Vec<usize> = self
+            .digests
+            .iter()
+            .filter(|d| self.marked.contains(&d.enzyme.name))
+            .flat_map(|d| d.cuts())
+            .collect();
+        cuts.sort_unstable();
+        cuts.dedup();
+        cuts
     }
 }
 
@@ -200,6 +224,8 @@ pub struct ReaderMetrics {
     pub bases_per_row: usize,
     /// Sequence rows visible in the viewport at once.
     pub visible_rows: usize,
+    /// Residues drawn per row in the Protein view.
+    pub residues_per_row: usize,
 }
 
 impl Default for ReaderMetrics {
@@ -208,8 +234,101 @@ impl Default for ReaderMetrics {
         ReaderMetrics {
             bases_per_row: 60,
             visible_rows: 20,
+            residues_per_row: 60,
         }
     }
+}
+
+/// Where the reader's sequence rows landed on screen, so a click can be
+/// mapped back to a base.
+#[derive(Debug, Clone, Copy)]
+pub struct ReaderHit {
+    /// The rows area (below the ruler), inside the border.
+    pub rows: Rect,
+    pub lines_per_row: usize,
+    pub bases_per_row: usize,
+    pub scroll_top: usize,
+    /// Columns taken by the position gutter before the first base.
+    pub gutter: u16,
+}
+
+/// A rendered list: its body rectangle and the index of its first row.
+#[derive(Debug, Clone, Copy)]
+pub struct ListHit {
+    pub body: Rect,
+    pub offset: usize,
+}
+
+/// Clickable regions recorded by the last frame. Rebuilt on every draw.
+#[derive(Debug, Clone, Default)]
+pub struct HitMap {
+    pub tabs: Vec<(Rect, View)>,
+    pub reader: Option<ReaderHit>,
+    pub overview: Option<Rect>,
+    pub orf_table: Option<ListHit>,
+    pub six_frame: Option<Rect>,
+    pub enzyme_table: Option<ListHit>,
+    pub palette_list: Option<ListHit>,
+}
+
+/// How a toast should be colored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToastKind {
+    Info,
+    Success,
+    Warn,
+}
+
+/// A transient notification stacked in the bottom-right corner.
+#[derive(Debug, Clone)]
+pub struct Toast {
+    pub msg: String,
+    pub kind: ToastKind,
+    /// Tick the toast appeared on; it slides in, holds, then fades.
+    pub born: u64,
+}
+
+/// Per-record lookups computed once instead of on every frame.
+#[derive(Debug, Clone, Default)]
+pub struct RecordCache {
+    /// GC prefix sums for O(1) window queries (overview track, gauges).
+    pub gc_prefix: Vec<u32>,
+    pub gc: f64,
+    pub counts: stats::BaseCounts,
+    pub dinucleotides: [[f64; 4]; 4],
+}
+
+/// The translation of one strand and frame, with what the Protein view
+/// derives from it.
+#[derive(Debug, Clone)]
+pub struct Translation {
+    pub residues: Vec<char>,
+    /// Raw hydropathy profile (one point per full window).
+    pub hydropathy: Vec<(f64, f64)>,
+    pub stops: usize,
+    /// Hydrophobic plus aromatic residues.
+    pub hydrophobic: usize,
+}
+
+/// A chart series of `(x, y)` points.
+pub type Series = Vec<(f64, f64)>;
+
+/// Derived data that depends on view parameters (strand, frame, chart
+/// width). Filled lazily during rendering and keyed by those parameters, so a
+/// multi-megabase record is not re-scanned on every frame.
+#[derive(Debug, Default)]
+pub struct Memo {
+    pub codons: Option<((bool, usize), [usize; 64])>,
+    pub curves: Option<(usize, Series, Series)>,
+    pub translation: Option<((bool, usize), Rc<Translation>)>,
+}
+
+/// The fuzzy command palette.
+#[derive(Debug, Clone, Default)]
+pub struct PaletteState {
+    pub open: bool,
+    pub query: String,
+    pub selected: usize,
 }
 
 /// The complete UI state.
@@ -219,8 +338,9 @@ pub struct App {
     pub view: View,
     /// Scroll cursor measured in bases within the current record.
     pub cursor: usize,
-    /// Top row of the reader viewport (in sequence rows).
-    pub scroll_top: usize,
+    /// Top row of the reader viewport (in sequence rows). Interior-mutable so
+    /// rendering can re-clamp it when the geometry changes under the cursor.
+    pub scroll_top: Cell<usize>,
     /// Reader geometry from the last render; updated through interior
     /// mutability because rendering only holds `&App`.
     pub metrics: Cell<ReaderMetrics>,
@@ -230,14 +350,24 @@ pub struct App {
     pub orf: OrfState,
     pub enzymes: EnzymeState,
     pub selection: Selection,
+    pub cache: RecordCache,
+    pub memo: RefCell<Memo>,
+    pub palette: PaletteState,
+    /// Clickable regions from the last frame, for the mouse handler.
+    pub hits: RefCell<HitMap>,
+    pub toasts: Vec<Toast>,
+    /// Tick the current view was entered on, driving its fade-in.
+    pub view_since: u64,
+    /// Show the complementary strand under each reader row.
+    pub show_complement: bool,
+    /// Show the amino-acid translation under each reader row.
+    pub show_translation: bool,
     /// Reading frame (0/1/2) for translation.
     pub frame: usize,
     /// Whether to view the reverse-complement strand.
     pub reverse: bool,
     pub show_help: bool,
     pub tick: u64,
-    /// A transient message plus the tick it stops being shown at.
-    pub flash: Option<(String, u64)>,
     pub should_quit: bool,
 }
 
@@ -248,7 +378,7 @@ impl App {
             current: 0,
             view: View::Reader,
             cursor: 0,
-            scroll_top: 0,
+            scroll_top: Cell::new(0),
             metrics: Cell::new(ReaderMetrics::default()),
             theme: Theme::Neon,
             helix: HelixState::default(),
@@ -256,11 +386,18 @@ impl App {
             orf: OrfState::default(),
             enzymes: EnzymeState::default(),
             selection: Selection::default(),
+            cache: RecordCache::default(),
+            memo: RefCell::new(Memo::default()),
+            palette: PaletteState::default(),
+            hits: RefCell::new(HitMap::default()),
+            toasts: Vec::new(),
+            view_since: 0,
+            show_complement: true,
+            show_translation: true,
             frame: 0,
             reverse: false,
             show_help: false,
             tick: 0,
-            flash: None,
             should_quit: false,
         };
         app.recompute_analyses();
@@ -275,19 +412,93 @@ impl App {
         self.orf.selected = 0;
         self.enzymes.digests = enzymes::digest_all(bases);
         self.enzymes.selected = 0;
+        self.cache = RecordCache {
+            gc_prefix: stats::gc_prefix(bases),
+            gc: stats::gc_content(bases),
+            counts: stats::base_counts(bases),
+            dinucleotides: stats::dinucleotide_oe(bases),
+        };
+        *self.memo.borrow_mut() = Memo::default();
     }
 
-    /// Show a short-lived message in the status line.
+    /// Codon usage for the current strand and frame.
+    pub fn codon_usage(&self) -> [usize; 64] {
+        let key = (self.reverse, self.frame);
+        let mut memo = self.memo.borrow_mut();
+        if let Some((k, usage)) = &memo.codons {
+            if *k == key {
+                return *usage;
+            }
+        }
+        let usage = stats::codon_usage(&self.record().oriented(self.reverse), self.frame);
+        memo.codons = Some((key, usage));
+        usage
+    }
+
+    /// GC% and GC-skew curves sampled `samples` times along the record.
+    pub fn gc_curves(&self, window: usize, samples: usize) -> (Series, Series) {
+        let mut memo = self.memo.borrow_mut();
+        if let Some((k, gc, skew)) = &memo.curves {
+            if *k == samples {
+                return (gc.clone(), skew.clone());
+            }
+        }
+        let bases = &self.record().bases;
+        let gc = stats::gc_sliding_window(bases, window, samples);
+        let skew = stats::gc_skew_window(bases, window, samples);
+        memo.curves = Some((samples, gc.clone(), skew.clone()));
+        (gc, skew)
+    }
+
+    /// The translation of the current strand and frame.
+    pub fn translation(&self, hydropathy_window: usize) -> Rc<Translation> {
+        use crate::fasta::aa::{self, AaClass};
+        let key = (self.reverse, self.frame);
+        let mut memo = self.memo.borrow_mut();
+        if let Some((k, t)) = &memo.translation {
+            if *k == key {
+                return Rc::clone(t);
+            }
+        }
+        let residues = crate::fasta::translate::translate(&self.record().oriented(self.reverse), self.frame);
+        let t = Rc::new(Translation {
+            hydropathy: aa::hydropathy_profile(&residues, hydropathy_window),
+            stops: residues.iter().filter(|&&a| a == '*').count(),
+            hydrophobic: residues
+                .iter()
+                .filter(|&&a| matches!(AaClass::of(a), AaClass::Hydrophobic | AaClass::Aromatic))
+                .count(),
+            residues,
+        });
+        memo.translation = Some((key, Rc::clone(&t)));
+        t
+    }
+
+    /// Pop up a short-lived notification.
     pub fn flash(&mut self, msg: impl Into<String>) {
-        self.flash = Some((msg.into(), self.tick + FLASH_TICKS));
+        self.toast(msg, ToastKind::Info);
     }
 
-    /// The message to show right now, if it has not expired.
-    pub fn flash_message(&self) -> Option<&str> {
-        self.flash
-            .as_ref()
-            .filter(|(_, until)| self.tick < *until)
-            .map(|(msg, _)| msg.as_str())
+    /// A notification for something that went right (a copy, a jump).
+    pub fn flash_ok(&mut self, msg: impl Into<String>) {
+        self.toast(msg, ToastKind::Success);
+    }
+
+    /// A notification for something that did not work.
+    pub fn flash_warn(&mut self, msg: impl Into<String>) {
+        self.toast(msg, ToastKind::Warn);
+    }
+
+    fn toast(&mut self, msg: impl Into<String>, kind: ToastKind) {
+        self.toasts.push(Toast {
+            msg: msg.into(),
+            kind,
+            born: self.tick,
+        });
+        // A burst of key presses should not bury the screen in toasts.
+        if self.toasts.len() > MAX_TOASTS {
+            self.toasts.remove(0);
+        }
     }
 
     /// The record currently in focus.
@@ -305,8 +516,15 @@ impl App {
     pub fn on_tick(&mut self) {
         self.tick = self.tick.wrapping_add(1);
         if !self.helix.paused {
-            self.helix.phase += self.helix.speed;
+            self.helix.phase += self.helix.speed * HELIX_TICK_SCALE;
         }
+        let tick = self.tick;
+        self.toasts.retain(|t| tick < t.born + TOAST_TICKS);
+    }
+
+    /// Progress `0..=1` of the current view's entrance animation.
+    pub fn view_progress(&self) -> f64 {
+        (self.tick.saturating_sub(self.view_since)) as f64 / TRANSITION_TICKS as f64
     }
 
     // --- Navigation ------------------------------------------------------
@@ -376,12 +594,11 @@ impl App {
         if m.bases_per_row == 0 {
             return;
         }
-        let row = self.cursor / m.bases_per_row;
-        if row < self.scroll_top {
-            self.scroll_top = row;
-        } else if m.visible_rows > 0 && row >= self.scroll_top + m.visible_rows {
-            self.scroll_top = row + 1 - m.visible_rows;
-        }
+        self.scroll_top.set(clamp_scroll(
+            self.scroll_top.get(),
+            self.cursor / m.bases_per_row,
+            m.visible_rows,
+        ));
     }
 
     // --- Records ---------------------------------------------------------
@@ -404,7 +621,7 @@ impl App {
 
     fn reset_for_record(&mut self) {
         self.cursor = 0;
-        self.scroll_top = 0;
+        self.scroll_top.set(0);
         self.selection.active = false;
         self.recompute_matches();
         self.recompute_analyses();
@@ -413,11 +630,86 @@ impl App {
     // --- Views & toggles -------------------------------------------------
 
     pub fn set_view(&mut self, view: View) {
-        self.view = view;
+        if self.view != view {
+            self.view = view;
+            self.view_since = self.tick;
+            self.enzymes.changed_at = self.tick;
+        }
+    }
+
+    pub fn toggle_complement(&mut self) {
+        self.show_complement = !self.show_complement;
+        self.flash(if self.show_complement {
+            "complement strand shown"
+        } else {
+            "complement strand hidden"
+        });
+    }
+
+    pub fn toggle_translation(&mut self) {
+        self.show_translation = !self.show_translation;
+        self.flash(if self.show_translation {
+            "translation track shown"
+        } else {
+            "translation track hidden"
+        });
+    }
+
+    /// The codon covering forward position `pos` in the current strand and
+    /// reading frame, as `(forward start, amino acid)`. On the reverse strand
+    /// the codon is read on the minus strand but reported in forward
+    /// coordinates, so the reader can draw it under the right bases.
+    pub fn codon_at(&self, pos: usize) -> Option<(usize, char)> {
+        let seq = &self.record().bases;
+        let n = seq.len();
+        if pos >= n {
+            return None;
+        }
+        if !self.reverse {
+            if pos < self.frame {
+                return None;
+            }
+            let start = pos - (pos - self.frame) % 3;
+            (start + 3 <= n).then(|| (start, crate::fasta::translate::codon_to_aa(&seq[start..start + 3])))
+        } else {
+            let j = n - 1 - pos; // index on the minus strand
+            if j < self.frame {
+                return None;
+            }
+            let rc_start = j - (j - self.frame) % 3;
+            if rc_start + 3 > n {
+                return None;
+            }
+            let fwd_start = n - rc_start - 3;
+            let codon: Vec<u8> = seq[fwd_start..fwd_start + 3]
+                .iter()
+                .rev()
+                .map(|&b| Record::complement(b))
+                .collect();
+            Some((fwd_start, crate::fasta::translate::codon_to_aa(&codon)))
+        }
+    }
+
+    /// Index of the residue under the cursor in the current translation.
+    pub fn cursor_residue(&self) -> Option<usize> {
+        let n = self.record_len();
+        let along = if self.reverse {
+            n.checked_sub(self.cursor + 1)?
+        } else {
+            self.cursor
+        };
+        along.checked_sub(self.frame).map(|d| d / 3)
+    }
+
+    /// Move the cursor `delta` residues along the strand in view.
+    pub fn move_residues(&mut self, delta: isize) {
+        let sign = if self.reverse { -1 } else { 1 };
+        self.move_cursor(delta * 3 * sign);
     }
 
     pub fn cycle_theme(&mut self) {
         self.theme = self.theme.next();
+        self.flash(format!("theme: {}", self.theme.name()));
     }
 
     pub fn toggle_reverse(&mut self) {
@@ -479,8 +771,8 @@ impl App {
             self.search.active = 0;
             self.jump_to(m.start);
         }
-        self.view = View::Reader;
-        self.flash(format!("{label} ({site}) — {hits} site(s)"));
+        self.set_view(View::Reader);
+        self.flash_ok(format!("{label} ({site}) — {hits} site(s)"));
     }
 
     /// Toggle whether the motif's reverse complement counts as a hit.
@@ -513,7 +805,7 @@ impl App {
             self.search.active = 0;
             self.jump_to(m.start);
         } else if !self.search.query.is_empty() {
-            self.flash(format!("no match for {}", self.search.query));
+            self.flash_warn(format!("no match for {}", self.search.query));
         }
     }
 
@@ -535,7 +827,7 @@ impl App {
     }
 
     /// Move the cursor to an absolute base index and reveal it.
-    fn jump_to(&mut self, pos: usize) {
+    pub fn jump_to(&mut self, pos: usize) {
         self.cursor = pos.min(self.record_len().saturating_sub(1));
         self.ensure_visible();
     }
@@ -631,7 +923,7 @@ impl App {
         };
         self.cursor = orf.end.saturating_sub(1).min(self.record_len().saturating_sub(1));
         self.ensure_visible();
-        self.view = View::Reader;
+        self.set_view(View::Reader);
         self.flash(format!(
             "ORF {} — {} aa @ {}..{}",
             orf.frame_label(),
@@ -649,6 +941,7 @@ impl App {
             return;
         }
         self.enzymes.selected = (self.enzymes.selected + 1) % n;
+        self.enzymes.changed_at = self.tick;
     }
 
     pub fn enzyme_prev(&mut self) {
@@ -657,6 +950,22 @@ impl App {
             return;
         }
         self.enzymes.selected = (self.enzymes.selected + n - 1) % n;
+        self.enzymes.changed_at = self.tick;
+    }
+
+    /// Add / remove the selected enzyme from the combined digest.
+    pub fn toggle_enzyme_mark(&mut self) {
+        let Some(name) = self.enzymes.selected_digest().map(|d| d.enzyme.name) else {
+            return;
+        };
+        if let Some(i) = self.enzymes.marked.iter().position(|&m| m == name) {
+            self.enzymes.marked.remove(i);
+            self.flash(format!("{name} removed from digest"));
+        } else {
+            self.enzymes.marked.push(name);
+            self.flash(format!("{name} added to digest ({} in total)", self.enzymes.marked.len()));
+        }
+        self.enzymes.changed_at = self.tick;
     }
 
     pub fn toggle_hide_noncutters(&mut self) {
@@ -723,11 +1032,35 @@ impl App {
     }
 }
 
+/// The smallest change to `top` that keeps `row` inside a viewport of
+/// `visible` rows.
+pub fn clamp_scroll(top: usize, row: usize, visible: usize) -> usize {
+    if row < top {
+        row
+    } else if visible > 0 && row >= top + visible {
+        row + 1 - visible
+    } else {
+        top
+    }
+}
+
 /// Phase rotation contributed per base when the cursor moves.
 pub const SCROLL_PHASE: f64 = 0.08;
 
 /// Default minimum ORF length, in amino acids.
 pub const DEFAULT_MIN_ORF_AA: usize = 30;
 
-/// How many event-loop ticks a flash message stays on screen (~2 s at 80 ms).
-const FLASH_TICKS: u64 = 25;
+/// Length of one animation tick.
+pub const TICK: std::time::Duration = std::time::Duration::from_millis(40);
+
+/// Helix speeds were tuned for an 80 ms tick; scale them to the real one.
+const HELIX_TICK_SCALE: f64 = 0.5;
+
+/// How long a toast lives, slide-in and fade-out included (~2.8 s).
+pub const TOAST_TICKS: u64 = 70;
+
+/// The most toasts stacked at once.
+const MAX_TOASTS: usize = 4;
+
+/// Length of the fade-in when switching views.
+pub const TRANSITION_TICKS: u64 = 8;

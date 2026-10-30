@@ -1,87 +1,102 @@
-//! The help overlay listing every key binding.
+//! The help overlay listing every key binding, laid out in two columns.
 
 use ratatui::{
+    layout::{Constraint, Layout},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, BorderType, Clear, Paragraph},
     Frame,
 };
 
-use super::centered_rect;
+use super::{centered, fx, glow};
 use crate::app::App;
 
 /// `(keys, description)` pairs; an empty key string starts a new section whose
 /// description is the heading.
-const BINDINGS: &[(&str, &str)] = &[
+const LEFT: &[(&str, &str)] = &[
     ("", "Navigation"),
-    ("←/h, →/l", "Move cursor one base"),
-    ("↑/k, ↓/j", "Move cursor one row"),
-    ("PgUp / PgDn", "Move one page"),
-    ("Home/g, End/G", "Jump to start / end"),
-    ("Tab / ]", "Next FASTA record"),
-    ("BackTab / [", "Previous FASTA record"),
+    ("←/h  →/l", "Move one base / residue"),
+    ("↑/k  ↓/j", "Move one row"),
+    ("PgUp PgDn", "Move one page"),
+    ("g  G", "Jump to start / end"),
+    ("Tab  S-Tab", "Next / previous record"),
+    ("mouse", "Click, drag and scroll anywhere"),
     ("", "Views"),
-    ("1 … 5", "Reader / Stats / Protein / ORFs / Enzymes"),
-    ("r", "Toggle reverse-complement strand"),
-    ("f", "Cycle reading frame 0/1/2"),
+    ("1 … 5", "Reader Stats Protein ORFs Enzymes"),
+    ("r", "Toggle reverse strand"),
+    ("f", "Cycle reading frame"),
+    ("c  a", "Complement / translation tracks"),
     ("t", "Cycle color theme"),
     ("", "Search"),
     ("/", "Search a motif (any IUPAC code)"),
-    ("n / N", "Jump to next / previous match"),
-    ("b", "Toggle reverse-complement matching"),
+    ("n  N", "Next / previous match"),
+    ("b", "Toggle minus-strand matching"),
+];
+
+const RIGHT: &[(&str, &str)] = &[
     ("", "Selection"),
-    ("v", "Start / drop a selection at the cursor"),
-    ("y", "Copy selection (or ORF) to the clipboard"),
-    ("", "ORF table (view 4)"),
-    ("↑ / ↓", "Select an ORF"),
-    ("Enter", "Show it in the reader, selected"),
-    ("m / M", "Lower / raise the minimum ORF length"),
-    ("", "Enzyme table (view 5)"),
-    ("↑ / ↓", "Select an enzyme"),
-    ("Enter", "Find its sites in the reader"),
+    ("v", "Start / drop a selection"),
+    ("drag", "Select with the mouse"),
+    ("y", "Copy selection (or ORF) as FASTA"),
+    ("", "ORF finder"),
+    ("↑ ↓  ⏎", "Select, open in reader"),
+    ("m  M", "Lower / raise minimum length"),
+    ("", "Restriction map"),
+    ("↑ ↓  ⏎", "Select, find sites in reader"),
+    ("x", "Add enzyme to combined digest"),
     ("u", "Show only enzymes that cut"),
     ("", "Helix"),
-    ("Space", "Pause / resume helix spin"),
-    ("+ / -", "Helix spin faster / slower"),
-    ("> / <", "More / less helix twist"),
+    ("Space", "Pause / resume spin"),
+    ("+ -  > <", "Speed / twist"),
     ("", "Other"),
-    ("?", "Toggle this help"),
-    ("Esc", "Close help / drop selection / clear search"),
-    ("q", "Quit"),
+    (":  Ctrl-P", "Command palette"),
+    ("?  Esc  q", "Help / back out / quit"),
 ];
 
 pub fn render(frame: &mut Frame, app: &App) {
-    let palette = app.theme.palette();
-    // The list is long enough that the overlay wants most of the screen.
-    let area = centered_rect(64, 94, frame.area());
+    let p = app.theme.palette();
+    let area = centered(104, LEFT.len().max(RIGHT.len()) as u16 + 4, frame.area());
 
-    let mut lines: Vec<Line> = Vec::with_capacity(BINDINGS.len() + 2);
-    for (keys, desc) in BINDINGS {
-        if keys.is_empty() {
-            lines.push(Line::from(Span::styled(
-                format!(" {desc}"),
-                Style::default()
-                    .fg(palette.match_bg)
-                    .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
-            )));
-            continue;
-        }
-        lines.push(Line::from(vec![
-            Span::styled(
-                format!("  {keys:<14}"),
-                Style::default().fg(palette.accent).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(desc.to_string(), Style::default().fg(palette.text)),
-        ]));
-    }
+    let column = |items: &[(&str, &str)]| -> Vec<Line<'static>> {
+        items
+            .iter()
+            .map(|(keys, desc)| {
+                if keys.is_empty() {
+                    Line::from(vec![
+                        Span::styled("▍", Style::default().fg(p.accent)),
+                        Span::styled(
+                            desc.to_string(),
+                            Style::default().fg(p.text).add_modifier(Modifier::BOLD),
+                        ),
+                    ])
+                } else {
+                    Line::from(vec![
+                        Span::styled(
+                            format!("  {keys:<11}"),
+                            Style::default().fg(p.accent).add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled(desc.to_string(), Style::default().fg(p.muted)),
+                    ])
+                }
+            })
+            .collect()
+    };
 
-    let popup = Paragraph::new(lines).block(
-        Block::bordered()
-            .border_type(BorderType::Rounded)
-            .title(" Key Bindings — press ? or Esc to close ")
-            .border_style(Style::default().fg(palette.accent)),
-    );
+    let title = fx::gradient_text(" ? Key bindings ", &p.grad, app.tick as f64 * 0.01, Modifier::BOLD);
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .title(title)
+        .title_bottom(Line::from(Span::styled(" any key or click to close ", Style::default().fg(p.muted))).right_aligned())
+        .style(Style::default().bg(p.surface));
+    let inner = block.inner(area);
 
     frame.render_widget(Clear, area);
-    frame.render_widget(popup, area);
+    frame.render_widget(block, area);
+    glow(frame, area, app);
+
+    let [l, r] = Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .horizontal_margin(1)
+        .areas(inner);
+    frame.render_widget(Paragraph::new(column(LEFT)), l);
+    frame.render_widget(Paragraph::new(column(RIGHT)), r);
 }
