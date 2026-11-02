@@ -37,6 +37,15 @@ pub fn band_row(size: usize, lo: f64, hi: f64, rows: usize) -> usize {
     ((t * (rows - 1) as f64).round() as usize).min(rows - 1)
 }
 
+/// Reserve terminal row `row` for a size label; false if it is already taken.
+fn claim_label_row(taken: &mut Vec<usize>, row: usize) -> bool {
+    if taken.contains(&row) {
+        return false;
+    }
+    taken.push(row);
+    true
+}
+
 /// Draw the gel into `area`. `run` in `0..=1` is how far the bands have
 /// migrated from the wells.
 pub fn render(buf: &mut Buffer, area: Rect, lanes: &[Lane], run: f64, p: &Palette) {
@@ -85,6 +94,7 @@ pub fn render(buf: &mut Buffer, area: Rect, lanes: &[Lane], run: f64, p: &Palett
         // so long fragments glow brighter, as with a real stain.
         let mut intensity = vec![0.0f64; rows];
         let max_band = lane.bands.iter().copied().max().unwrap_or(1).max(1) as f64;
+        let mut labelled = Vec::new();
         for &size in &lane.bands {
             let target = well + 1 + band_row(size, lo, hi, span);
             let y = well + ((target - well) as f64 * run).round() as usize;
@@ -96,7 +106,10 @@ pub fn render(buf: &mut Buffer, area: Rect, lanes: &[Lane], run: f64, p: &Palett
             if y + 1 < rows {
                 intensity[y + 1] += mass * 0.3;
             }
-            if lane.ladder && run >= 1.0 && li == 0 {
+            // Two ladder bands can land in the same terminal row once the scale
+            // is squeezed (e.g. a digest with tiny fragments); label only the
+            // first so the numbers don't overprint into a bogus size.
+            if lane.ladder && run >= 1.0 && li == 0 && claim_label_row(&mut labelled, target / 2) {
                 let cy = gel.y + (target / 2) as u16;
                 let txt = super::thousands(size);
                 let tx = area.x + label_w.saturating_sub(txt.len() as u16 + 1);
@@ -136,5 +149,31 @@ mod tests {
         assert!(big < small);
         assert_eq!(band_row(10000, lo, hi, 40), 0);
         assert_eq!(band_row(100, lo, hi, 40), 39);
+    }
+
+    #[test]
+    fn ladder_labels_never_share_a_row() {
+        let theme = crate::theme::Theme::Slate.palette();
+        let ladder = ladder_for(912);
+        let valid: Vec<String> = ladder.iter().map(|&s| crate::ui::thousands(s)).collect();
+        // A 4 bp fragment squeezes the log scale so neighbouring ladder bands
+        // (e.g. 1,000 and 800) fall into the same terminal row.
+        let lanes = [
+            Lane { label: "ladder".into(), bands: ladder.clone(), ladder: true },
+            Lane { label: "AluI".into(), bands: vec![304, 225, 174, 162, 32, 11, 4], ladder: false },
+        ];
+        for h in 8..60 {
+            let area = Rect::new(0, 0, 40, h);
+            let mut buf = Buffer::empty(area);
+            render(&mut buf, area, &lanes, 1.0, &theme);
+            for y in 1..h {
+                let label: String = (0..6).map(|x| buf[(x, y)].symbol().to_string()).collect();
+                let label = label.trim();
+                assert!(
+                    label.is_empty() || valid.iter().any(|v| v == label),
+                    "height {h}, row {y}: overprinted label {label:?}"
+                );
+            }
+        }
     }
 }
