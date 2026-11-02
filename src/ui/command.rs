@@ -8,7 +8,7 @@ use ratatui::{
     Frame,
 };
 
-use super::{fx, glow, scroll_window};
+use super::{focus, scroll_window};
 use crate::app::{App, ListHit};
 
 /// Rows of results shown at once.
@@ -31,7 +31,10 @@ pub fn render(frame: &mut Frame, app: &App) {
 
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
-        .title(fx::gradient_text(" ❯ Command palette ", &p.grad, app.tick as f64 * 0.01, Modifier::BOLD))
+        .title(Line::from(vec![
+            Span::styled(" ❯ ", Style::default().fg(p.accent)),
+            Span::styled("Command palette ", Style::default().fg(p.text).add_modifier(Modifier::BOLD)),
+        ]))
         .title_bottom(
             Line::from(Span::styled(" ↑↓ choose · ⏎ run · Esc close · try a position or a motif ", Style::default().fg(p.muted)))
                 .right_aligned(),
@@ -40,7 +43,7 @@ pub fn render(frame: &mut Frame, app: &App) {
     let inner = block.inner(area);
     frame.render_widget(Clear, area);
     frame.render_widget(block, area);
-    glow(frame, area, app);
+    focus(frame, area, app);
 
     // Input line with a blinking caret.
     let caret = if app.tick / 12 % 2 == 0 { "▏" } else { " " };

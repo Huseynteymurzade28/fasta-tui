@@ -9,7 +9,7 @@ use ratatui::{
     Frame,
 };
 
-use super::{fx, glow, helix, hints, overview, panel, thousands};
+use super::{fx, focus, helix, hints, overview, panel, thousands};
 use crate::app::{clamp_scroll, App, ReaderHit, ReaderMetrics};
 use crate::fasta::aa::AaClass;
 use crate::fasta::Record;
@@ -81,7 +81,7 @@ fn render_sequence(frame: &mut Frame, area: Rect, app: &App) {
         ));
     let inner = block.inner(area);
     frame.render_widget(block, area);
-    glow(frame, area, app);
+    focus(frame, area, app);
 
     if len == 0 || inner.height < 2 {
         frame.render_widget(Paragraph::new("<empty sequence>"), inner);
@@ -295,8 +295,8 @@ impl<'a> BaseStyler<'a> {
         // In-frame start and stop codons get a soft tinted background.
         if let Some((_, aa)) = self.app.codon_at(k) {
             match aa {
-                'M' => style = style.bg(fx::lerp(p.bg, p.start_bg, 0.55)).add_modifier(Modifier::BOLD),
-                '*' => style = style.bg(fx::lerp(p.bg, p.stop_bg, 0.6)).add_modifier(Modifier::BOLD),
+                'M' => style = style.bg(fx::lerp(p.bg, p.start_bg, 0.4)),
+                '*' => style = style.bg(fx::lerp(p.bg, p.stop_bg, 0.4)),
                 _ => {}
             }
         }
@@ -311,16 +311,14 @@ impl<'a> BaseStyler<'a> {
             }
         }
         if k == self.app.cursor {
-            // A gently breathing cursor is easy to find without being loud.
-            let bg = fx::lerp(p.accent, p.text, 0.35 * fx::pulse(self.app.tick, 30));
-            style = Style::default().fg(fx::contrast_text(bg)).bg(bg).add_modifier(Modifier::BOLD);
+            style = Style::default().fg(fx::contrast_text(p.accent)).bg(p.accent).add_modifier(Modifier::BOLD);
         }
         style
     }
 
     fn complement(&self, k: usize, comp: char) -> Style {
         let p = self.p;
-        let mut style = Style::default().fg(fx::lerp(p.base_color(comp), p.bg, 0.45));
+        let mut style = Style::default().fg(fx::lerp(p.base_color(comp), p.bg, 0.5));
         if self.in_selection(k) {
             style = style.bg(fx::lerp(p.bg, p.match_bg, 0.18));
         }
@@ -337,7 +335,8 @@ impl<'a> BaseStyler<'a> {
         let Some((start, aa)) = self.app.codon_at(k) else {
             return Span::raw(" ");
         };
-        let shade = if (start / 3) % 2 == 0 { Some(p.surface) } else { None };
+        // A faint stripe on alternate codons keeps frame boundaries visible.
+        let shade = if (start / 3) % 2 == 0 { Some(fx::lerp(p.bg, p.surface, 0.6)) } else { None };
         let mut style = Style::default();
         if let Some(bg) = shade {
             style = style.bg(bg);
@@ -350,8 +349,8 @@ impl<'a> BaseStyler<'a> {
         }
         let class = AaClass::of(aa);
         style = match aa {
-            'M' => style.fg(fx::contrast_text(p.start_bg)).bg(p.start_bg).add_modifier(Modifier::BOLD),
-            '*' => style.fg(fx::contrast_text(p.stop_bg)).bg(p.stop_bg).add_modifier(Modifier::BOLD),
+            'M' => style.fg(fx::lerp(p.start_bg, p.text, 0.45)).add_modifier(Modifier::BOLD),
+            '*' => style.fg(fx::lerp(p.stop_bg, p.text, 0.35)).add_modifier(Modifier::BOLD),
             _ => style.fg(p.aa_color(class)),
         };
         Span::styled(aa.to_string(), style)
@@ -393,7 +392,7 @@ fn render_selection_panel(frame: &mut Frame, area: Rect, app: &App) {
                 None => format!("{:.1} °C (Wallace)", s.tm_wallace),
             };
             let mut spans = vec![key("len"), val(format!("{} nt", s.len)), key("  GC")];
-            spans.extend(fx::hbar(6, s.gc, p.base_a, p.base_g, Some(p.surface)));
+            spans.extend(fx::hbar(6, s.gc, p.base_g, Some(p.surface)));
             spans.push(val(format!(" {:.1}%", s.gc * 100.0)));
             spans.extend([
                 key("  Tm"),

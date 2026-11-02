@@ -380,7 +380,7 @@ impl App {
             cursor: 0,
             scroll_top: Cell::new(0),
             metrics: Cell::new(ReaderMetrics::default()),
-            theme: Theme::Neon,
+            theme: Theme::Slate,
             helix: HelixState::default(),
             search: SearchState::default(),
             orf: OrfState::default(),

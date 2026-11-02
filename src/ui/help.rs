@@ -8,7 +8,7 @@ use ratatui::{
     Frame,
 };
 
-use super::{centered, fx, glow};
+use super::{centered, focus};
 use crate::app::App;
 
 /// `(keys, description)` pairs; an empty key string starts a new section whose
@@ -82,7 +82,10 @@ pub fn render(frame: &mut Frame, app: &App) {
             .collect()
     };
 
-    let title = fx::gradient_text(" ? Key bindings ", &p.grad, app.tick as f64 * 0.01, Modifier::BOLD);
+    let title = Line::from(vec![
+        Span::styled(" ? ", Style::default().fg(p.accent)),
+        Span::styled("Key bindings ", Style::default().fg(p.text).add_modifier(Modifier::BOLD)),
+    ]);
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
         .title(title)
@@ -92,7 +95,7 @@ pub fn render(frame: &mut Frame, app: &App) {
 
     frame.render_widget(Clear, area);
     frame.render_widget(block, area);
-    glow(frame, area, app);
+    focus(frame, area, app);
 
     let [l, r] = Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
         .horizontal_margin(1)

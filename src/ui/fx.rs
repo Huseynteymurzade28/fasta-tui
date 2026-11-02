@@ -1,12 +1,12 @@
-//! Truecolor effects: blending, gradients, animated borders, fades and
-//! sub-cell bars. Everything here works on `Color::Rgb`; named colors are
-//! mapped to their usual xterm values so blends still behave.
+//! Truecolor helpers: blending, heatmap ramps, fades and sub-cell bars.
+//! Everything here works on `Color::Rgb`; named colors are mapped to their
+//! usual xterm values so blends still behave.
 
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
-    style::{Color, Modifier, Style},
-    text::{Line, Span},
+    style::{Color, Style},
+    text::Span,
 };
 
 /// RGB components of any color.
@@ -55,18 +55,6 @@ pub fn gradient(stops: &[Color], t: f64) -> Color {
     }
 }
 
-/// Like [`gradient`] but periodic: `t` wraps and the last stop blends back
-/// into the first, so the result can scroll forever without a seam.
-pub fn cycle(stops: &[Color], t: f64) -> Color {
-    let n = stops.len();
-    if n == 0 {
-        return Color::Reset;
-    }
-    let x = t.rem_euclid(1.0) * n as f64;
-    let i = x.floor() as usize % n;
-    lerp(stops[i], stops[(i + 1) % n], x - x.floor())
-}
-
 /// Relative luminance in `0..=1`, for choosing readable text over a color.
 pub fn luminance(c: Color) -> f64 {
     let (r, g, b) = rgb(c);
@@ -88,72 +76,8 @@ pub fn ease_out(t: f64) -> f64 {
     1.0 - (1.0 - t).powi(3)
 }
 
-/// A smooth 0..1..0 pulse with the given period in ticks.
-pub fn pulse(tick: u64, period: u64) -> f64 {
-    let phase = (tick % period.max(1)) as f64 / period.max(1) as f64;
-    0.5 - 0.5 * (phase * std::f64::consts::TAU).cos()
-}
-
-/// Text whose letters run through a scrolling gradient.
-pub fn gradient_text(text: &str, stops: &[Color], phase: f64, modifier: Modifier) -> Line<'static> {
-    let n = text.chars().count().max(1) as f64;
-    Line::from(
-        text.chars()
-            .enumerate()
-            .map(|(i, ch)| {
-                let color = cycle(stops, i as f64 / n * 0.6 + phase);
-                Span::styled(ch.to_string(), Style::default().fg(color).add_modifier(modifier))
-            })
-            .collect::<Vec<_>>(),
-    )
-}
-
-/// Recolor the border ring of `area` with a gradient that travels around the
-/// perimeter. Title text on the border keeps its own colors.
-pub fn paint_border(buf: &mut Buffer, area: Rect, stops: &[Color], phase: f64) {
-    if area.width < 2 || area.height < 2 {
-        return;
-    }
-    let (w, h) = (area.width as usize, area.height as usize);
-    let perimeter = (2 * (w + h - 2)) as f64;
-    let mut paint = |x: u16, y: u16, i: usize| {
-        if let Some(cell) = buf.cell_mut((x, y)) {
-            if is_border_glyph(cell.symbol()) {
-                cell.set_fg(cycle(stops, i as f64 / perimeter + phase));
-            }
-        }
-    };
-    let (x0, y0) = (area.x, area.y);
-    let (x1, y1) = (area.right() - 1, area.bottom() - 1);
-    let mut i = 0;
-    for x in x0..=x1 {
-        paint(x, y0, i);
-        i += 1;
-    }
-    for y in y0 + 1..=y1 {
-        paint(x1, y, i);
-        i += 1;
-    }
-    for x in (x0..x1).rev() {
-        paint(x, y1, i);
-        i += 1;
-    }
-    for y in (y0 + 1..y1).rev() {
-        paint(x0, y, i);
-        i += 1;
-    }
-}
-
-fn is_border_glyph(s: &str) -> bool {
-    matches!(
-        s,
-        "─" | "│" | "╭" | "╮" | "╰" | "╯" | "┌" | "┐" | "└" | "┘" | "━" | "┃" | "┏" | "┓" | "┗"
-            | "┛" | "═" | "║" | "╔" | "╗" | "╚" | "╝"
-    )
-}
-
 /// Blend every cell of `area` toward `toward` by `amount` (0 = untouched,
-/// 1 = fully replaced). Used for view transitions and fading toasts.
+/// 1 = fully replaced). Used for popup backdrops and fading toasts.
 pub fn fade(buf: &mut Buffer, area: Rect, toward: Color, amount: f64) {
     if amount <= 0.0 {
         return;
@@ -177,13 +101,12 @@ pub fn fade(buf: &mut Buffer, area: Rect, toward: Color, amount: f64) {
 const EIGHTHS: [&str; 9] = [" ", "▏", "▎", "▍", "▌", "▋", "▊", "▉", "█"];
 
 /// A horizontal bar `width` cells long filled to `frac`, with 1/8-cell
-/// resolution and a gradient running from `from` to `to` along its length.
-pub fn hbar(width: usize, frac: f64, from: Color, to: Color, track: Option<Color>) -> Vec<Span<'static>> {
+/// resolution, in a single flat color.
+pub fn hbar(width: usize, frac: f64, color: Color, track: Option<Color>) -> Vec<Span<'static>> {
     let eighths = (frac.clamp(0.0, 1.0) * width as f64 * 8.0).round() as usize;
     let (full, part) = (eighths / 8, eighths % 8);
     let mut spans = Vec::with_capacity(width);
     for i in 0..width {
-        let color = gradient(&[from, to], i as f64 / width.max(1) as f64);
         let mut style = Style::default().fg(color);
         if let Some(t) = track {
             style = style.bg(t);
@@ -200,17 +123,18 @@ pub fn hbar(width: usize, frac: f64, from: Color, to: Color, track: Option<Color
     spans
 }
 
-/// A fixed perceptual-ish heat ramp (deep violet → magenta → amber → cream)
-/// shared by every heatmap so they read alike across themes.
+/// A calm sequential ramp (slate → teal → sage → sand) shared by every
+/// heatmap so they read alike across themes. Kept low in saturation so a
+/// full screen of it stays easy on the eyes.
 pub fn heat(t: f64) -> Color {
     gradient(
         &[
-            Color::Rgb(22, 16, 50),
-            Color::Rgb(84, 28, 120),
-            Color::Rgb(176, 46, 120),
-            Color::Rgb(240, 110, 70),
-            Color::Rgb(252, 210, 120),
-            Color::Rgb(252, 250, 220),
+            Color::Rgb(30, 40, 58),
+            Color::Rgb(38, 78, 96),
+            Color::Rgb(56, 118, 124),
+            Color::Rgb(112, 160, 138),
+            Color::Rgb(186, 196, 150),
+            Color::Rgb(232, 222, 184),
         ],
         t,
     )
@@ -220,11 +144,11 @@ pub fn heat(t: f64) -> Color {
 pub fn diverging(t: f64, mid: Color) -> Color {
     gradient(
         &[
-            Color::Rgb(40, 110, 230),
-            Color::Rgb(90, 190, 240),
+            Color::Rgb(72, 112, 168),
+            Color::Rgb(112, 148, 186),
             mid,
-            Color::Rgb(250, 160, 80),
-            Color::Rgb(240, 60, 80),
+            Color::Rgb(196, 150, 112),
+            Color::Rgb(184, 92, 96),
         ],
         t,
     )
@@ -249,16 +173,15 @@ mod tests {
         assert_eq!(gradient(&s, 0.0), s[0]);
         assert_eq!(gradient(&s, 0.5), s[1]);
         assert_eq!(gradient(&s, 1.0), s[2]);
-        assert_eq!(cycle(&s, 1.0), s[0]);
     }
 
     #[test]
     fn hbar_resolution() {
         let c = Color::Rgb(1, 2, 3);
-        let bar = hbar(4, 0.5, c, c, None);
+        let bar = hbar(4, 0.5, c, None);
         let s: String = bar.iter().map(|s| s.content.as_ref()).collect();
         assert_eq!(s, "██  ");
-        let bar = hbar(2, 0.25 + 1.0 / 16.0, c, c, None);
+        let bar = hbar(2, 0.25 + 1.0 / 16.0, c, None);
         let s: String = bar.iter().map(|s| s.content.as_ref()).collect();
         assert_eq!(s, "▋ ");
     }

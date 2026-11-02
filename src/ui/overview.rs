@@ -158,8 +158,7 @@ fn draw_position(buf: &mut Buffer, area: Rect, app: &App) {
     for x in 0..w {
         if let Some(cell) = buf.cell_mut((area.x + x as u16, area.y)) {
             if x >= vx0 && x <= vx1 {
-                let t = if vx1 > vx0 { (x - vx0) as f64 / (vx1 - vx0) as f64 } else { 0.0 };
-                cell.set_symbol("━").set_fg(fx::gradient(&p.grad, t)).set_bg(p.surface);
+                cell.set_symbol("━").set_fg(p.accent).set_bg(p.surface);
             } else {
                 cell.set_symbol("─").set_fg(p.border);
             }

@@ -10,7 +10,7 @@ use ratatui::{
 };
 
 use super::gel::{self, Lane};
-use super::{chip, fx, glow, hints, panel, scroll_window, thousands};
+use super::{chip, fx, focus, hints, panel, scroll_window, thousands};
 use crate::app::{App, ListHit};
 use crate::fasta::enzymes;
 
@@ -126,7 +126,7 @@ fn render_table(frame: &mut Frame, area: Rect, app: &App) {
     let selected = app.enzymes.selected.checked_sub(first).filter(|_| !rows_data.is_empty());
     let mut state = TableState::default().with_selected(selected);
     frame.render_stateful_widget(table, area, &mut state);
-    glow(frame, area, app);
+    focus(frame, area, app);
 
     app.hits.borrow_mut().enzyme_table = Some(ListHit {
         body: Rect { y: inner.y + 1, height: inner.height.saturating_sub(1), ..inner },

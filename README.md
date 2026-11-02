@@ -65,8 +65,9 @@ all inside your terminal.
   standard input (`-`), with RNA (`U`) and IUPAC ambiguity codes accepted.
 - **Protein export** — `--export-protein` translates every record to a protein
   FASTA file (or stdout) headlessly, for use in scripts and pipelines.
-- **Themes** — four truecolor palettes (Neon, Aurora, Pale, High-Contrast),
-  with animated gradient borders, view fade-ins and slide-in notifications.
+- **Themes** — five truecolor palettes (Slate, Neon, Aurora, Pale,
+  High-Contrast). The default, Slate, keeps colors low in saturation and the
+  chrome flat so long reading sessions stay easy on the eyes.
   A truecolor terminal is recommended.
 
 ## Screenshots
@@ -84,8 +85,8 @@ all inside your terminal.
   </tr>
   <tr>
     <td colspan="2" valign="top">
-      <img src="assets/screenshot-enzymes.png" alt="Restriction map: type-II enzymes digested against the record with site counts and end types">
-      <p align="center"><em>Restriction map — type-II enzymes, cut sites and end types</em></p>
+      <img src="assets/screenshot-enzymes.png" alt="Restriction map: type-II enzymes with site counts, end types and cut positions, beside a virtual agarose gel of an AluI digest">
+      <p align="center"><em>Restriction map &amp; virtual gel — cut sites, end types and digest bands</em></p>
     </td>
   </tr>
 </table>
@@ -291,7 +292,7 @@ src/
 │   └── clipboard.rs   # OSC 52 clipboard copy (no external dependency)
 └── ui/                # rendering layer (Ratatui)
     ├── mod.rs         # top-level layout, header, status line, toasts, panels
-    ├── fx.rs          # truecolor effects: gradients, fades, sub-cell bars, heat ramps
+    ├── fx.rs          # truecolor helpers: blending, fades, sub-cell bars, heat ramps
     ├── reader.rs      # double-stranded reader with translation track
     ├── overview.rs    # whole-record GC / ORF / viewport tracks
     ├── helix.rs       # the 3D Braille double helix

@@ -11,7 +11,7 @@ use ratatui::{
     Frame,
 };
 
-use super::{fx, glow, panel, thousands};
+use super::{fx, focus, panel, thousands};
 use crate::app::App;
 use crate::fasta::stats::BASES;
 use crate::fasta::translate::codon_to_aa;
@@ -72,8 +72,7 @@ fn render_composition(frame: &mut Frame, area: Rect, app: &App) {
         spans.extend(fx::hbar(
             bar_w,
             n as f64 / max as f64 * grow,
-            fx::lerp(p.bg, color, 0.45),
-            color,
+            fx::lerp(p.bg, color, 0.8),
             Some(p.surface),
         ));
         spans.push(Span::styled(format!(" {:>8}", thousands(n)), Style::default().fg(p.text)));
@@ -237,7 +236,7 @@ fn render_gc_curve(frame: &mut Frame, area: Rect, app: &App) {
                 .labels(vec![Span::raw("0"), Span::raw("50"), Span::raw("100")]),
         );
     frame.render_widget(chart, area);
-    glow(frame, area, app);
+    focus(frame, area, app);
 }
 
 /// The textbook codon table (first base by row block, second by column,

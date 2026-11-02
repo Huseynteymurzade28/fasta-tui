@@ -10,7 +10,7 @@ use ratatui::{
     Frame,
 };
 
-use super::{fx, glow, panel, scroll_window, thousands};
+use super::{fx, focus, panel, scroll_window, thousands};
 use crate::app::{App, ReaderMetrics, Translation};
 use crate::fasta::aa::{self, AaClass};
 use crate::theme::Palette;
@@ -159,7 +159,7 @@ fn render_sequence(
     .title_bottom(Line::from(legend));
     let inner = block.inner(area);
     frame.render_widget(block, area);
-    glow(frame, area, app);
+    focus(frame, area, app);
 
     if residues.is_empty() {
         frame.render_widget(
@@ -198,8 +198,7 @@ fn render_sequence(
             }
             let mut style = residue_style(res, p);
             if Some(k) == cursor {
-                let bg = fx::lerp(p.accent, p.text, 0.35 * fx::pulse(app.tick, 30));
-                style = Style::default().fg(fx::contrast_text(bg)).bg(bg).add_modifier(Modifier::BOLD);
+                style = Style::default().fg(fx::contrast_text(p.accent)).bg(p.accent).add_modifier(Modifier::BOLD);
             } else if on_row && style.bg.is_none() {
                 style = style.bg(p.surface);
             }

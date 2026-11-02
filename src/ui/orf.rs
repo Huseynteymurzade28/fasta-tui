@@ -10,7 +10,7 @@ use ratatui::{
     Frame,
 };
 
-use super::{chip, fx, glow, hints, panel, protein::residue_style, scroll_window, thousands};
+use super::{chip, fx, focus, hints, panel, protein::residue_style, scroll_window, thousands};
 use crate::app::{App, ListHit};
 use crate::fasta::aa::{self, AaClass};
 use crate::fasta::orf::Orf;
@@ -71,7 +71,7 @@ fn render_table(frame: &mut Frame, area: Rect, app: &App) {
         .skip(first)
         .map(|(i, orf)| {
             let color = strand_color(orf, &p);
-            let bar = fx::hbar(bar_w, orf.aa_len as f64 / max_aa as f64, fx::lerp(p.bg, color, 0.35), color, None);
+            let bar = fx::hbar(bar_w, orf.aa_len as f64 / max_aa as f64, fx::lerp(p.bg, color, 0.55), None);
             let zebra = if i % 2 == 0 { p.bg } else { fx::lerp(p.bg, p.surface, 0.6) };
             Row::new(vec![
                 Cell::from(Span::styled(format!("{}", i + 1), Style::default().fg(p.muted))),
@@ -112,7 +112,7 @@ fn render_table(frame: &mut Frame, area: Rect, app: &App) {
 
     let mut state = TableState::default().with_selected(Some(app.orf.selected - first));
     frame.render_stateful_widget(table, area, &mut state);
-    glow(frame, area, app);
+    focus(frame, area, app);
 
     app.hits.borrow_mut().orf_table = Some(ListHit {
         body: Rect { y: inner.y + 1, height: inner.height.saturating_sub(1), ..inner },
@@ -139,7 +139,6 @@ fn render_six_frames(frame: &mut Frame, area: Rect, app: &App) {
     let to_x = |pos: usize| (pos * w / len).min(w - 1);
     let cursor_x = to_x(app.cursor);
     let selected = app.orf.selected_orf().copied();
-    let glow_t = fx::pulse(app.tick, 40);
 
     let buf = frame.buffer_mut();
     for (lane, label) in labels.iter().enumerate() {
@@ -164,7 +163,7 @@ fn render_six_frames(frame: &mut Frame, area: Rect, app: &App) {
         let (x0, x1) = (to_x(orf.start), to_x(orf.end.saturating_sub(1)));
         let is_sel = Some(*orf) == selected;
         let base = strand_color(orf, &p);
-        let color = if is_sel { fx::lerp(p.accent, p.text, glow_t * 0.4) } else { fx::lerp(p.bg, base, 0.75) };
+        let color = if is_sel { p.accent } else { fx::lerp(p.bg, base, 0.75) };
         for x in x0..=x1 {
             let glyph = match (orf.strand, x) {
                 (Strand::Forward, x) if x == x1 && x1 > x0 => "▶",

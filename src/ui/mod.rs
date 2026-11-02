@@ -50,12 +50,6 @@ pub fn draw(frame: &mut Frame, app: &App) {
         View::Enzymes => enzymes::render(frame, content, app),
     }
 
-    // Views fade in from the background when switched to.
-    let t = app.view_progress();
-    if t < 1.0 {
-        fx::fade(frame.buffer_mut(), content, p.bg, 1.0 - fx::ease_out(t));
-    }
-
     render_status(frame, status, app, &p);
     render_toasts(frame, content, app, &p);
 
@@ -109,11 +103,30 @@ pub fn hints(pairs: &[(&str, &str)], p: &Palette) -> Line<'static> {
     Line::from(spans)
 }
 
-/// Run the theme gradient around a panel's border — reserved for the panel
-/// that has the user's attention.
-pub fn glow(frame: &mut Frame, area: Rect, app: &App) {
+/// Mark the panel that has the user's attention: its border switches from
+/// the quiet border color to a softened accent. Title text keeps its colors.
+pub fn focus(frame: &mut Frame, area: Rect, app: &App) {
     let p = app.theme.palette();
-    fx::paint_border(frame.buffer_mut(), area, &p.grad, app.tick as f64 * 0.004);
+    let color = fx::lerp(p.border, p.accent, 0.7);
+    let buf = frame.buffer_mut();
+    let area = area.intersection(buf.area);
+    if area.width < 2 || area.height < 2 {
+        return;
+    }
+    let ring = (area.left()..area.right())
+        .flat_map(|x| [(x, area.top()), (x, area.bottom() - 1)])
+        .chain((area.top()..area.bottom()).flat_map(|y| [(area.left(), y), (area.right() - 1, y)]));
+    for pos in ring {
+        if let Some(cell) = buf.cell_mut(pos) {
+            if is_border_glyph(cell.symbol()) {
+                cell.set_fg(color);
+            }
+        }
+    }
+}
+
+fn is_border_glyph(s: &str) -> bool {
+    matches!(s, "─" | "│" | "╭" | "╮" | "╰" | "╯" | "┌" | "┐" | "└" | "┘")
 }
 
 /// A colored pill: ` label ` with a solid background.
@@ -142,10 +155,11 @@ pub fn thousands(n: usize) -> String {
 fn render_header(frame: &mut Frame, area: Rect, app: &App, p: &Palette) {
     frame.render_widget(Block::default().style(Style::default().bg(p.surface)), area);
 
-    // Animated logo: the theme gradient scrolls through the letters.
     let logo = " ▞▚ fasta-tui ";
-    let phase = app.tick as f64 * 0.01;
-    let logo_line = fx::gradient_text(logo, &p.grad, phase, Modifier::BOLD);
+    let logo_line = Line::from(vec![
+        Span::styled(" ▞▚ ", Style::default().fg(p.accent)),
+        Span::styled("fasta-tui ", Style::default().fg(p.text).add_modifier(Modifier::BOLD)),
+    ]);
     let logo_w = logo.chars().count() as u16;
     frame.render_widget(logo_line, Rect { width: logo_w.min(area.width), ..area });
 
@@ -160,29 +174,23 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App, p: &Palette) {
         }
         let rect = Rect { x, y: area.y, width: w, height: 1 };
         let line = if active {
-            // The active tab carries the gradient as its background.
-            let n = label.chars().count().max(1) as f64;
-            Line::from(
-                label
-                    .chars()
-                    .enumerate()
-                    .map(|(j, ch)| {
-                        let bg = fx::gradient(&p.grad, j as f64 / n);
-                        Span::styled(
-                            ch.to_string(),
-                            Style::default()
-                                .bg(bg)
-                                .fg(fx::contrast_text(bg))
-                                .add_modifier(Modifier::BOLD),
-                        )
-                    })
-                    .collect::<Vec<_>>(),
-            )
+            // The active tab sits on the page background, so it reads as
+            // connected to the content below; an accent underline marks it.
+            let style = Style::default().bg(p.bg).fg(p.text).add_modifier(Modifier::BOLD);
+            Line::from(vec![
+                Span::styled(format!(" {} ", view.icon()), style.fg(p.accent)),
+                Span::styled(format!("{} ", i + 1), style.fg(p.accent)),
+                Span::styled(
+                    view.title().to_string(),
+                    style.add_modifier(Modifier::UNDERLINED).underline_color(p.accent),
+                ),
+                Span::styled(" ", style),
+            ])
         } else {
             Line::from(vec![
                 Span::styled(format!(" {} ", view.icon()), Style::default().fg(p.muted)),
-                Span::styled(format!("{} ", i + 1), Style::default().fg(p.accent)),
-                Span::styled(format!("{} ", view.title()), Style::default().fg(p.text)),
+                Span::styled(format!("{} ", i + 1), Style::default().fg(p.muted)),
+                Span::styled(format!("{} ", view.title()), Style::default().fg(p.muted)),
             ])
         };
         frame.render_widget(line, rect);
@@ -270,7 +278,7 @@ fn render_status(frame: &mut Frame, area: Rect, app: &App, p: &Palette) {
     spans.push(strong(thousands(app.cursor + 1)));
     spans.push(muted(format!("/{} ", thousands(len))));
     let frac = if len > 1 { app.cursor as f64 / (len - 1) as f64 } else { 0.0 };
-    spans.extend(fx::hbar(8, frac, p.grad[0], p.grad[1], Some(p.surface_hi)));
+    spans.extend(fx::hbar(8, frac, fx::lerp(p.surface_hi, p.accent, 0.6), Some(p.surface_hi)));
     spans.push(sep());
 
     // The base and codon under the cursor.
